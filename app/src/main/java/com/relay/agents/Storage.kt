@@ -21,7 +21,12 @@ class Storage(private val ctx: Context) {
     private val prefs = ctx.getSharedPreferences("relay", Context.MODE_PRIVATE)
     private val cpFile get() = File(ctx.filesDir, "checkpoint.json")
 
+    /** آخر رسالة خطأ للتحميل/الحفظ (للعرض في الواجهة)؛ null إذا نجحت العملية الأخيرة. */
+    var lastError: String? = null
+        private set
+
     fun loadAgents(): List<AgentConfig> {
+        lastError = null
         val encrypted = prefs.getString(ENCRYPTED_AGENTS, null)
         if (encrypted != null) {
             // لا نرجع إلى نص صريح إذا تعذر فك التشفير؛ ذلك قد يخفي تلفاً أو مشكلة في المفتاح.
@@ -29,7 +34,10 @@ class Storage(private val ctx: Context) {
                 val plain = decrypt(encrypted)
                 val arr = JSONArray(plain)
                 (0 until arr.length()).map { AgentConfig.fromJson(arr.getJSONObject(it)) }
-            }.getOrDefault(emptyList())
+            }.getOrElse {
+                lastError = "تعذّر فك تشفير الوكلاء المحفوظين (قد يكون مفتاح Keystore فُقد). أعد إضافة الوكلاء ومفاتيحهم."
+                emptyList()
+            }
         }
 
         // ترحيل لمرة واحدة من إصدارات التطبيق القديمة التي خزنت المفاتيح كنص صريح.
@@ -38,20 +46,30 @@ class Storage(private val ctx: Context) {
             val arr = JSONArray(legacy)
             (0 until arr.length()).map { AgentConfig.fromJson(arr.getJSONObject(it)) }
         }.getOrDefault(emptyList())
-        if (migrated.isNotEmpty()) saveAgents(migrated)
-        else prefs.edit().remove(LEGACY_AGENTS).apply()
+        if (migrated.isEmpty()) {
+            prefs.edit().remove(LEGACY_AGENTS).apply()
+            return migrated
+        }
+        // فشل الترحيل لا يجب أن يُسقط التطبيق عند الإقلاع: نبقي النص القديم ونحاول لاحقاً.
+        if (!saveAgents(migrated)) {
+            lastError = "تعذّر تشفير الإعدادات القديمة الآن؛ ستُعاد المحاولة لاحقاً."
+        }
         return migrated
     }
 
-    fun saveAgents(list: List<AgentConfig>) {
+    /** يحفظ الوكلاء مشفّرين. يرجع false عند الفشل (ويضبط lastError) بدل رمي استثناء يُسقط التطبيق. */
+    fun saveAgents(list: List<AgentConfig>): Boolean = try {
         val json = JSONArray(list.map { it.toJson() }).toString()
         val ciphertext = encrypt(json)
-        check(
-            prefs.edit()
-                .putString(ENCRYPTED_AGENTS, ciphertext)
-                .remove(LEGACY_AGENTS)
-                .commit()
-        ) { "تعذر حفظ إعدادات الوكلاء المشفّرة" }
+        val ok = prefs.edit()
+            .putString(ENCRYPTED_AGENTS, ciphertext)
+            .remove(LEGACY_AGENTS)
+            .commit()
+        if (!ok) lastError = "تعذّر حفظ إعدادات الوكلاء المشفّرة."
+        ok
+    } catch (e: Exception) {
+        lastError = "تعذّر تشفير/حفظ الوكلاء: ${e.javaClass.simpleName}"
+        false
     }
 
     fun loadCheckpoint(): Checkpoint? = runCatching {

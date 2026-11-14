@@ -18,6 +18,42 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var checkpoint by mutableStateOf(storage.loadCheckpoint())
         private set
+
+    /** رسالة للمستخدم (خطأ تخزين أو تحقق من إدخال)؛ تُعرض أعلى الشاشة حتى يغلقها. */
+    var message by mutableStateOf<String?>(storage.lastError)
+        private set
+
+    /** نتيجة اختبار اتصال كل وكيل (id → نص). */
+    var testResults by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+
+    fun dismissMessage() {
+        message = null
+    }
+
+    private fun persistAgents() {
+        if (!storage.saveAgents(agents)) message = storage.lastError ?: "تعذّر حفظ الوكلاء."
+    }
+
+    /** يرسل طلباً صغيراً للتأكد أن المفتاح والنموذج صحيحان قبل التشغيل. */
+    fun testAgent(id: String) {
+        val a = agents.firstOrNull { it.id == id } ?: return
+        if (a.provider.manual) {
+            testResults = testResults + (id to "الوكيل اليدوي لا يُختبر عبر API")
+            return
+        }
+        testResults = testResults + (id to "جارٍ الاختبار…")
+        viewModelScope.launch {
+            val text = when (val r = ClaudeClient.send(a, "Reply with the single word OK.", "ping", 256)) {
+                is ApiResult.Ok -> "✅ يعمل"
+                is ApiResult.Fail ->
+                    // رد فارغ = وصل الطلب للمزوّد والمفتاح مقبول (قد يستهلك النموذج الميزانية في التفكير).
+                    if (r.code == 0 && r.message == ApiResult.EMPTY_REPLY) "✅ الاتصال سليم (الرد فارغ)"
+                    else "❌ ${r.code}: ${r.message.take(100)}"
+            }
+            testResults = testResults + (id to text)
+        }
+    }
     var states by mutableStateOf<List<Orchestrator.AgentState>>(emptyList())
         private set
     var running by mutableStateOf(false)
@@ -47,21 +83,28 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addAgent(name: String, key: String, model: String, provider: Provider) {
         if (name.isBlank() || (key.isBlank() && !provider.manual)) return
+        val modelOrUrl = model.trim().ifEmpty { provider.defaultModel }
+        // الوكيل اليدوي يفتح الرابط داخل WebView: نقبل https فقط (لا http ولا file ولا javascript).
+        if (provider.manual && !modelOrUrl.startsWith("https://")) {
+            message = "رابط موقع الدردشة يجب أن يبدأ بـ https://"
+            return
+        }
         agents = agents + AgentConfig(
             UUID.randomUUID().toString(), name.trim(), key.trim(),
-            model.trim().ifEmpty { provider.defaultModel }, true, provider
+            modelOrUrl, true, provider
         )
-        storage.saveAgents(agents)
+        persistAgents()
     }
 
     fun removeAgent(id: String) {
         agents = agents.filterNot { it.id == id }
-        storage.saveAgents(agents)
+        testResults = testResults - id
+        persistAgents()
     }
 
     fun toggleAgent(id: String) {
         agents = agents.map { if (it.id == id) it.copy(enabled = !it.enabled) else it }
-        storage.saveAgents(agents)
+        persistAgents()
     }
 
     fun start(goal: String) {
