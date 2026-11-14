@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -70,16 +71,27 @@ fun RelayScreen(vm: RelayViewModel) {
 fun AgentsTab(vm: RelayViewModel) {
     var name by remember { mutableStateOf("") }
     var key by remember { mutableStateOf("") }
-    var model by remember { mutableStateOf("claude-sonnet-4-5") }
+    var provider by remember { mutableStateOf(Provider.GEMINI) }
+    var model by remember { mutableStateOf(Provider.GEMINI.defaultModel) }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Text("أضف وكيلاً بمفتاح Claude API (من console.anthropic.com). كل وكيل بمفتاح مستقل، وإذا توقف يكمل التالي.",
+            Text("اختر المزوّد وأضف مفتاحه. المزوّدون المجانيون يعطونك مفتاحاً مجانياً من موقعهم. كل وكيل بمفتاح مستقل، وإذا توقف يكمل التالي.",
                 style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Provider.values().forEach { p ->
+                    FilterChip(
+                        selected = provider == p,
+                        onClick = { provider = p; model = p.defaultModel },
+                        label = { Text(p.label) }
+                    )
+                }
+            }
+            Text("مفتاح ${provider.label} من: ${provider.keyUrl}", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(name, { name = it }, label = { Text("اسم الوكيل") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             OutlinedTextField(key, { key = it }, label = { Text("مفتاح API") }, modifier = Modifier.fillMaxWidth(),
                 singleLine = true, visualTransformation = PasswordVisualTransformation())
             OutlinedTextField(model, { model = it }, label = { Text("النموذج") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            Button(onClick = { vm.addAgent(name, key, model); name = ""; key = "" }, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { vm.addAgent(name, key, model, provider); name = ""; key = "" }, modifier = Modifier.fillMaxWidth()) {
                 Text("إضافة وكيل")
             }
             Divider()
@@ -89,7 +101,7 @@ fun AgentsTab(vm: RelayViewModel) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(a.name, style = MaterialTheme.typography.titleSmall)
-                        Text("${a.model} • ••••${a.apiKey.takeLast(4)}", style = MaterialTheme.typography.bodySmall)
+                        Text("${a.provider.label} • ${a.model} • ••••${a.apiKey.takeLast(4)}", style = MaterialTheme.typography.bodySmall)
                     }
                     Switch(checked = a.enabled, onCheckedChange = { vm.toggleAgent(a.id) })
                     TextButton(onClick = { vm.removeAgent(a.id) }) { Text("حذف") }

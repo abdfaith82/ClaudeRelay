@@ -24,9 +24,12 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
 
     private var job: Job? = null
 
-    fun addAgent(name: String, key: String, model: String) {
+    fun addAgent(name: String, key: String, model: String, provider: Provider) {
         if (name.isBlank() || key.isBlank()) return
-        agents = agents + AgentConfig(UUID.randomUUID().toString(), name.trim(), key.trim(), model.trim().ifEmpty { "claude-sonnet-4-5" })
+        agents = agents + AgentConfig(
+            UUID.randomUUID().toString(), name.trim(), key.trim(),
+            model.trim().ifEmpty { provider.defaultModel }, true, provider
+        )
         storage.saveAgents(agents)
     }
 

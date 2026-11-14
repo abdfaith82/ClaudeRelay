@@ -3,25 +3,36 @@ package com.relay.agents
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** وكيل = اسم + مفتاح API + نموذج. */
+/** مزوّد الذكاء الاصطناعي: Claude بمفتاح مدفوع، والبقية لها طبقات مجانية بمفتاح من موقع المزوّد. */
+enum class Provider(val label: String, val defaultModel: String, val keyUrl: String, val free: Boolean) {
+    CLAUDE("Claude", "claude-sonnet-4-5", "console.anthropic.com", false),
+    GEMINI("Gemini (مجاني)", "gemini-2.5-flash", "aistudio.google.com/apikey", true),
+    GROQ("Groq (مجاني)", "llama-3.3-70b-versatile", "console.groq.com/keys", true),
+    OPENROUTER("OpenRouter (مجاني)", "meta-llama/llama-3.3-70b-instruct:free", "openrouter.ai/keys", true)
+}
+
+/** وكيل = اسم + مزوّد + مفتاح API + نموذج. */
 data class AgentConfig(
     val id: String,
     val name: String,
     val apiKey: String,
-    val model: String = "claude-sonnet-4-5",
-    val enabled: Boolean = true
+    val model: String = Provider.CLAUDE.defaultModel,
+    val enabled: Boolean = true,
+    val provider: Provider = Provider.CLAUDE
 ) {
     fun toJson() = JSONObject()
         .put("id", id).put("name", name).put("apiKey", apiKey)
-        .put("model", model).put("enabled", enabled)
+        .put("model", model).put("enabled", enabled).put("provider", provider.name)
 
     companion object {
         fun fromJson(o: JSONObject) = AgentConfig(
             id = o.getString("id"),
             name = o.getString("name"),
             apiKey = o.getString("apiKey"),
-            model = o.optString("model", "claude-sonnet-4-5"),
-            enabled = o.optBoolean("enabled", true)
+            model = o.optString("model", Provider.CLAUDE.defaultModel),
+            enabled = o.optBoolean("enabled", true),
+            provider = runCatching { Provider.valueOf(o.optString("provider", "CLAUDE")) }
+                .getOrDefault(Provider.CLAUDE)
         )
     }
 }
