@@ -4,11 +4,28 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** مزوّد الذكاء الاصطناعي: Claude بمفتاح مدفوع، والبقية لها طبقات مجانية بمفتاح من موقع المزوّد. */
-enum class Provider(val label: String, val defaultModel: String, val keyUrl: String, val free: Boolean) {
+enum class Provider(
+    val label: String,
+    val defaultModel: String,
+    val keyUrl: String,
+    val free: Boolean,
+    val endpoint: String = "",
+    /** manual = وكيل ويب يدوي: يفتح موقع الدردشة داخل التطبيق ويلصق المستخدم الرد بنفسه (حقل model يحمل رابط الموقع). */
+    val manual: Boolean = false
+) {
     CLAUDE("Claude", "claude-sonnet-4-5", "console.anthropic.com", false),
     GEMINI("Gemini (مجاني)", "gemini-2.5-flash", "aistudio.google.com/apikey", true),
-    GROQ("Groq (مجاني)", "llama-3.3-70b-versatile", "console.groq.com/keys", true),
-    OPENROUTER("OpenRouter (مجاني)", "meta-llama/llama-3.3-70b-instruct:free", "openrouter.ai/keys", true)
+    GROQ("Groq (مجاني)", "llama-3.3-70b-versatile", "console.groq.com/keys", true,
+        "https://api.groq.com/openai/v1/chat/completions"),
+    OPENROUTER("OpenRouter (مجاني)", "meta-llama/llama-3.3-70b-instruct:free", "openrouter.ai/keys", true,
+        "https://openrouter.ai/api/v1/chat/completions"),
+    MISTRAL("Mistral (مجاني)", "mistral-small-latest", "console.mistral.ai/api-keys", true,
+        "https://api.mistral.ai/v1/chat/completions"),
+    CEREBRAS("Cerebras (مجاني)", "llama-3.3-70b", "cloud.cerebras.ai", true,
+        "https://api.cerebras.ai/v1/chat/completions"),
+    HUGGINGFACE("Hugging Face (مجاني)", "meta-llama/Llama-3.3-70B-Instruct", "huggingface.co/settings/tokens", true,
+        "https://router.huggingface.co/v1/chat/completions"),
+    WEB("وكيل ويب يدوي", "https://claude.ai", "", true, manual = true)
 }
 
 /** وكيل = اسم + مزوّد + مفتاح API + نموذج. */

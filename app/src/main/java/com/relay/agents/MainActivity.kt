@@ -15,7 +15,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.viewinterop.AndroidView
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.ui.unit.dp
 import java.io.File
 
@@ -55,9 +60,46 @@ fun CrashScreen(text: String, onContinue: () -> Unit) {
     }
 }
 
+/** شاشة الوكيل اليدوي: تسجّل الدخول وترسل وتنسخ بنفسك؛ التطبيق لا يحقن نصاً ولا يقرأ الصفحة. */
+@Composable
+fun ManualScreen(req: RelayViewModel.ManualRequest, onResult: (String?) -> Unit) {
+    val clipboard = LocalClipboardManager.current
+    var reply by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxSize().systemBarsPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("المطلوب منك: ${req.agent.name}", style = MaterialTheme.typography.titleSmall)
+        Text("١) انسخ المهمة  ٢) الصقها وأرسلها في الموقع أدناه  ٣) انسخ الرد والصقه هنا", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { clipboard.setText(AnnotatedString(req.prompt)) }) { Text("نسخ المهمة") }
+            OutlinedButton(onClick = { onResult(null) }) { Text("تخطي") }
+        }
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    webViewClient = WebViewClient()
+                    loadUrl(req.agent.model)
+                }
+            }
+        )
+        OutlinedTextField(reply, { reply = it }, label = { Text("الصق رد الموقع هنا") },
+            modifier = Modifier.fillMaxWidth(), maxLines = 3)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { reply = clipboard.getText()?.text ?: "" }) { Text("لصق من الحافظة") }
+            Button(onClick = { onResult(reply) }, enabled = reply.isNotBlank()) { Text("إرسال الرد") }
+        }
+    }
+}
+
 @Composable
 fun RelayScreen(vm: RelayViewModel) {
     var tab by remember { mutableIntStateOf(0) }
+    val manual = vm.manualRequest
+    if (manual != null) {
+        ManualScreen(manual) { vm.answerManual(it) }
+        return
+    }
     Column(Modifier.fillMaxSize().systemBarsPadding()) {
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("الوكلاء") })
@@ -86,11 +128,18 @@ fun AgentsTab(vm: RelayViewModel) {
                     )
                 }
             }
-            Text("مفتاح ${provider.label} من: ${provider.keyUrl}", style = MaterialTheme.typography.bodySmall)
+            Text(
+                if (provider.manual) "وكيل يدوي: عند حاجة الفريق إليه يفتح موقع الدردشة داخل التطبيق، تسجّل دخولك بنفسك، تلصق المهمة وترسلها، ثم تلصق الرد. يُستخدم كاحتياطي أخير."
+                else "مفتاح ${provider.label} من: ${provider.keyUrl}",
+                style = MaterialTheme.typography.bodySmall
+            )
             OutlinedTextField(name, { name = it }, label = { Text("اسم الوكيل") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            OutlinedTextField(key, { key = it }, label = { Text("مفتاح API") }, modifier = Modifier.fillMaxWidth(),
-                singleLine = true, visualTransformation = PasswordVisualTransformation())
-            OutlinedTextField(model, { model = it }, label = { Text("النموذج") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            if (!provider.manual) {
+                OutlinedTextField(key, { key = it }, label = { Text("مفتاح API") }, modifier = Modifier.fillMaxWidth(),
+                    singleLine = true, visualTransformation = PasswordVisualTransformation())
+            }
+            OutlinedTextField(model, { model = it }, label = { Text(if (provider.manual) "رابط موقع الدردشة" else "النموذج") },
+                modifier = Modifier.fillMaxWidth(), singleLine = true)
             Button(onClick = { vm.addAgent(name, key, model, provider); name = ""; key = "" }, modifier = Modifier.fillMaxWidth()) {
                 Text("إضافة وكيل")
             }
@@ -101,7 +150,11 @@ fun AgentsTab(vm: RelayViewModel) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(a.name, style = MaterialTheme.typography.titleSmall)
-                        Text("${a.provider.label} • ${a.model} • ••••${a.apiKey.takeLast(4)}", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (a.provider.manual) "${a.provider.label} • ${a.model}"
+                            else "${a.provider.label} • ${a.model} • ••••${a.apiKey.takeLast(4)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                     Switch(checked = a.enabled, onCheckedChange = { vm.toggleAgent(a.id) })
                     TextButton(onClick = { vm.removeAgent(a.id) }) { Text("حذف") }

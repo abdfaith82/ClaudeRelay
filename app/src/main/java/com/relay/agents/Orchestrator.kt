@@ -12,6 +12,8 @@ import kotlin.coroutines.coroutineContext
  */
 class Orchestrator(
     private val storage: Storage,
+    /** يطلب من المستخدم تنفيذ المهمة في موقع ويب ولصق الرد. يرجع null عند التخطي. */
+    private val askManual: suspend (AgentConfig, String) -> String?,
     private val onUpdate: (Checkpoint, List<AgentState>) -> Unit
 ) {
     data class AgentState(val agent: AgentConfig, val cooldownUntil: Long = 0L, val disabled: Boolean = false, val note: String = "")
@@ -33,7 +35,9 @@ class Orchestrator(
     /** يرجع أول وكيل جاهز، أو null إن كانوا جميعاً في راحة/معطّلين. */
     private fun pick(skip: Set<String>): AgentState? {
         val now = System.currentTimeMillis()
-        return states.firstOrNull { !it.disabled && it.cooldownUntil <= now && it.agent.id !in skip }
+        val ready = states.filter { !it.disabled && it.cooldownUntil <= now && it.agent.id !in skip }
+        // وكلاء API أولاً؛ الوكيل اليدوي (ويب) احتياطي أخير حتى لا نزعج المستخدم دون حاجة.
+        return ready.firstOrNull { !it.agent.provider.manual } ?: ready.firstOrNull()
     }
 
     private fun nextWakeMs(): Long {
@@ -59,6 +63,15 @@ class Orchestrator(
                 continue
             }
             val a = st.agent
+            if (a.provider.manual) {
+                log("🖐️ ${a.name}: بانتظار تنفيذك اليدوي في الويب")
+                val reply = askManual(a, "$system\n\n---\n\n$user")
+                if (!reply.isNullOrBlank()) return reply.trim() to a.name
+                log("⏭️ تخطي ${a.name} (راحة 10 دقائق)")
+                setState(a.id) { it.copy(cooldownUntil = System.currentTimeMillis() + 600_000, note = "تخطي") }
+                triedThisRound += a.id
+                continue
+            }
             when (val r = ClaudeClient.send(a, system, user, maxTokens)) {
                 is ApiResult.Ok -> return r.text to a.name
                 is ApiResult.Fail -> {
@@ -92,7 +105,7 @@ class Orchestrator(
 
     /** يبدأ هدفاً جديداً أو يكمل نقطة محفوظة (إن كان goal نفسه). */
     suspend fun run(goal: String, agents: List<AgentConfig>, resume: Checkpoint?) {
-        states = agents.filter { it.enabled && it.apiKey.isNotBlank() }
+        states = agents.filter { it.enabled && (it.apiKey.isNotBlank() || it.provider.manual) }
             .map { AgentState(it) }.toMutableList()
         cp = resume ?: Checkpoint(goal)
         if (states.isEmpty()) { log("⛔ لا يوجد وكلاء مفعّلون"); return }

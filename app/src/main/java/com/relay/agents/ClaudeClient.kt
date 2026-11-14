@@ -67,9 +67,9 @@ object ClaudeClient {
                 )
                 .put("generationConfig", JSONObject().put("maxOutputTokens", maxTokens))
         )
-        Provider.GROQ, Provider.OPENROUTER -> Req(
-            if (a.provider == Provider.GROQ) "https://api.groq.com/openai/v1/chat/completions"
-            else "https://openrouter.ai/api/v1/chat/completions",
+        Provider.WEB -> error("وكيل الويب يدوي ولا يُستدعى عبر API")
+        Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE -> Req(
+            a.provider.endpoint,
             mapOf("Authorization" to "Bearer ${a.apiKey}"),
             JSONObject().put("model", a.model).put("max_tokens", maxTokens).put(
                 "messages",
@@ -95,7 +95,8 @@ object ClaudeClient {
                 .getJSONObject("content").getJSONArray("parts")
             buildString { for (i in 0 until parts.length()) append(parts.getJSONObject(i).optString("text")) }
         }
-        Provider.GROQ, Provider.OPENROUTER ->
+        Provider.WEB -> ""
+        Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE ->
             j.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
     }
 
