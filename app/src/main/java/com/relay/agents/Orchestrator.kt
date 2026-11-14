@@ -143,6 +143,8 @@ class Orchestrator(
             val steps = cp.steps.toMutableList()
             steps[i] = step.copy(status = StepStatus.DONE, result = res.first, doneBy = res.second)
             cp = cp.copy(steps = steps)
+            storage.saveCheckpoint(cp) // احفظ نتيجة الخطوة فوراً قبل أي عملية أخرى
+            onUpdate(cp, states.toList())
             log("✅ خطوة ${i + 1} اكتملت بواسطة ${res.second}")
         }
 
@@ -155,6 +157,7 @@ class Orchestrator(
                 "الهدف: ${cp.goal}\n\nنتائج الخطوات:\n$all", 2048
             ) ?: return
             cp = cp.copy(finalAnswer = fin.first)
+            storage.saveCheckpoint(cp)
             log("🏁 انتهى (${fin.second})")
         }
     }

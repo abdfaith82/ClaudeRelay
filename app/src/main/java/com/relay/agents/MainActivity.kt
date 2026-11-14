@@ -117,7 +117,7 @@ fun AgentsTab(vm: RelayViewModel) {
     var model by remember { mutableStateOf(Provider.GEMINI.defaultModel) }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Text("اختر المزوّد وأضف مفتاحه. المزوّدون المجانيون يعطونك مفتاحاً مجانياً من موقعهم. كل وكيل بمفتاح مستقل، وإذا توقف يكمل التالي.",
+            Text("أضف عدة وكلاء من مزوّدين مختلفين. يدعم التطبيق OpenAI (نماذج ChatGPT عبر API) وClaude وGemini ومزوّدين آخرين. عند تعطل وكيل ينتقل تلقائياً إلى التالي، ويمكن استئناف المهمة من آخر خطوة محفوظة.",
                 style = MaterialTheme.typography.bodySmall)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Provider.values().forEach { p ->
@@ -130,7 +130,7 @@ fun AgentsTab(vm: RelayViewModel) {
             }
             Text(
                 if (provider.manual) "وكيل يدوي: عند حاجة الفريق إليه يفتح موقع الدردشة داخل التطبيق، تسجّل دخولك بنفسك، تلصق المهمة وترسلها، ثم تلصق الرد. يُستخدم كاحتياطي أخير."
-                else "مفتاح ${provider.label} من: ${provider.keyUrl}",
+                else "مفتاح API لـ ${provider.label} من: ${provider.keyUrl}. ملاحظة: اشتراك ChatGPT أو Claude لا يتضمن رصيد API تلقائياً.",
                 style = MaterialTheme.typography.bodySmall
             )
             OutlinedTextField(name, { name = it }, label = { Text("اسم الوكيل") }, modifier = Modifier.fillMaxWidth(), singleLine = true)

@@ -68,7 +68,7 @@ object ClaudeClient {
                 .put("generationConfig", JSONObject().put("maxOutputTokens", maxTokens))
         )
         Provider.WEB -> error("وكيل الويب يدوي ولا يُستدعى عبر API")
-        Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE -> Req(
+        Provider.OPENAI, Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE -> Req(
             a.provider.endpoint,
             mapOf("Authorization" to "Bearer ${a.apiKey}"),
             JSONObject().put("model", a.model).put("max_tokens", maxTokens).put(
@@ -96,7 +96,7 @@ object ClaudeClient {
             buildString { for (i in 0 until parts.length()) append(parts.getJSONObject(i).optString("text")) }
         }
         Provider.WEB -> ""
-        Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE ->
+        Provider.OPENAI, Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE ->
             j.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
     }
 

@@ -13,6 +13,8 @@ enum class Provider(
     /** manual = وكيل ويب يدوي: يفتح موقع الدردشة داخل التطبيق ويلصق المستخدم الرد بنفسه (حقل model يحمل رابط الموقع). */
     val manual: Boolean = false
 ) {
+    OPENAI("OpenAI / ChatGPT API", "gpt-4.1-mini", "platform.openai.com/api-keys", false,
+        "https://api.openai.com/v1/chat/completions"),
     CLAUDE("Claude", "claude-sonnet-4-5", "console.anthropic.com", false),
     GEMINI("Gemini (مجاني)", "gemini-2.5-flash", "aistudio.google.com/apikey", true),
     GROQ("Groq (مجاني)", "llama-3.3-70b-versatile", "console.groq.com/keys", true,
