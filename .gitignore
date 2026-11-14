@@ -7,3 +7,6 @@ local.properties
 .idea/
 .kotlin/
 *.iml
+*.jks
+*.keystore
+.env

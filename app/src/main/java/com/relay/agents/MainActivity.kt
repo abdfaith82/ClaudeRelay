@@ -78,8 +78,11 @@ fun ManualScreen(req: RelayViewModel.ManualRequest, onResult: (String?) -> Unit)
                 WebView(ctx).apply {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
                     webViewClient = WebViewClient()
-                    loadUrl(req.agent.model)
+                    // https فقط: لا نحمّل file:// ولا javascript: ولا http من حقل يدخله المستخدم.
+                    if (req.agent.model.startsWith("https://")) loadUrl(req.agent.model)
                 }
             }
         )
@@ -101,11 +104,24 @@ fun RelayScreen(vm: RelayViewModel) {
         return
     }
     Column(Modifier.fillMaxSize().systemBarsPadding()) {
+        MessageBar(vm)
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("الوكلاء") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("التشغيل") })
         }
         if (tab == 0) AgentsTab(vm) else RunTab(vm)
+    }
+}
+
+/** شريط رسالة (خطأ تخزين/تحقق إدخال) أعلى الشاشة؛ يختفي عند الإغلاق. */
+@Composable
+fun MessageBar(vm: RelayViewModel) {
+    val m = vm.message ?: return
+    Card(Modifier.fillMaxWidth().padding(8.dp)) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(m, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { vm.dismissMessage() }) { Text("حسناً") }
+        }
     }
 }
 
@@ -117,7 +133,7 @@ fun AgentsTab(vm: RelayViewModel) {
     var model by remember { mutableStateOf(Provider.GEMINI.defaultModel) }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Text("اختر المزوّد وأضف مفتاحه. المزوّدون المجانيون يعطونك مفتاحاً مجانياً من موقعهم. كل وكيل بمفتاح مستقل، وإذا توقف يكمل التالي.",
+            Text("أضف عدة وكلاء من مزوّدين مختلفين. يدعم التطبيق OpenAI (نماذج ChatGPT عبر API) وClaude وGemini ومزوّدين آخرين. عند تعطل وكيل ينتقل تلقائياً إلى التالي، ويمكن استئناف المهمة من آخر خطوة محفوظة.",
                 style = MaterialTheme.typography.bodySmall)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Provider.values().forEach { p ->
@@ -130,7 +146,7 @@ fun AgentsTab(vm: RelayViewModel) {
             }
             Text(
                 if (provider.manual) "وكيل يدوي: عند حاجة الفريق إليه يفتح موقع الدردشة داخل التطبيق، تسجّل دخولك بنفسك، تلصق المهمة وترسلها، ثم تلصق الرد. يُستخدم كاحتياطي أخير."
-                else "مفتاح ${provider.label} من: ${provider.keyUrl}",
+                else "مفتاح API لـ ${provider.label} من: ${provider.keyUrl}. ملاحظة: اشتراك ChatGPT أو Claude لا يتضمن رصيد API تلقائياً.",
                 style = MaterialTheme.typography.bodySmall
             )
             OutlinedTextField(name, { name = it }, label = { Text("اسم الوكيل") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
@@ -155,8 +171,10 @@ fun AgentsTab(vm: RelayViewModel) {
                             else "${a.provider.label} • ${a.model} • ••••${a.apiKey.takeLast(4)}",
                             style = MaterialTheme.typography.bodySmall
                         )
+                        vm.testResults[a.id]?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
                     Switch(checked = a.enabled, onCheckedChange = { vm.toggleAgent(a.id) })
+                    if (!a.provider.manual) TextButton(onClick = { vm.testAgent(a.id) }) { Text("اختبار") }
                     TextButton(onClick = { vm.removeAgent(a.id) }) { Text("حذف") }
                 }
             }
@@ -190,7 +208,8 @@ fun RunTab(vm: RelayViewModel) {
                         it.cooldownUntil > System.currentTimeMillis() -> "في راحة"
                         else -> "جاهز"
                     }
-                    Text("• ${it.agent.name}: $s", style = MaterialTheme.typography.bodySmall)
+                    val note = if (it.note.isNotEmpty()) " (${it.note})" else ""
+                    Text("• ${it.agent.name}: $s$note", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

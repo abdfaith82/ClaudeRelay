@@ -1,7 +1,10 @@
 package com.relay.agents
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import kotlin.coroutines.coroutineContext
 
@@ -21,9 +24,18 @@ class Orchestrator(
     private var states: MutableList<AgentState> = mutableListOf()
     private var cp = Checkpoint("")
 
-    private fun log(msg: String) {
-        cp = cp.copy(log = cp.log + msg)
-        storage.saveCheckpoint(cp)
+    /**
+     * يحفظ نقطة الاستئناف على خيط IO وبلا إمكانية إلغاء: حتى لو أُوقفت المهمة فور وصول نتيجة خطوة،
+     * تُكتب النتيجة قبل أن يتوقف التنفيذ، فلا تضيع.
+     */
+    private suspend fun persist() {
+        withContext(NonCancellable + Dispatchers.IO) { storage.saveCheckpoint(cp) }
+    }
+
+    /** يضيف سطراً للسجل ويحفظ نقطة الاستئناف الحالية (بما فيها آخر نتيجة خطوة) ثم يحدّث الواجهة. */
+    private suspend fun log(msg: String) {
+        cp = cp.copy(log = (cp.log + msg).takeLast(200))
+        persist()
         onUpdate(cp, states.toList())
     }
 
@@ -49,7 +61,12 @@ class Orchestrator(
     /** ينفذ طلباً واحداً مع التبديل بين الوكلاء. يرجع (النص، اسم الوكيل) أو null عند الإلغاء/عدم وجود وكلاء. */
     private suspend fun callWithFailover(system: String, user: String, maxTokens: Int): Pair<String, String>? {
         val triedThisRound = mutableSetOf<String>()
+        var failures = 0
         while (coroutineContext.isActive) {
+            if (failures >= MAX_FAILURES) {
+                log("⛔ توقف بعد $MAX_FAILURES محاولة فاشلة. النقطة محفوظة، اضغط «استئناف» لاحقاً.")
+                return null
+            }
             val st = pick(triedThisRound)
             if (st == null) {
                 val wait = nextWakeMs()
@@ -75,9 +92,10 @@ class Orchestrator(
             when (val r = ClaudeClient.send(a, system, user, maxTokens)) {
                 is ApiResult.Ok -> return r.text to a.name
                 is ApiResult.Fail -> {
+                    failures++
                     if (r.fatal) {
-                        log("❌ ${a.name}: مفتاح مرفوض (${r.code}) — تم تعطيله")
-                        setState(a.id) { it.copy(disabled = true, note = "مفتاح مرفوض") }
+                        log("❌ ${a.name}: رفض الطلب (${r.code}: ${r.message.take(80)}) — تم تعطيله؛ راجع المفتاح أو اسم النموذج")
+                        setState(a.id) { it.copy(disabled = true, note = "مرفوض ${r.code}") }
                     } else {
                         val cool = when (r.code) {
                             429 -> 60_000L
@@ -143,6 +161,7 @@ class Orchestrator(
             val steps = cp.steps.toMutableList()
             steps[i] = step.copy(status = StepStatus.DONE, result = res.first, doneBy = res.second)
             cp = cp.copy(steps = steps)
+            // log يحفظ نقطة الاستئناف فوراً (بما فيها نتيجة هذه الخطوة) قبل أي عملية أخرى.
             log("✅ خطوة ${i + 1} اكتملت بواسطة ${res.second}")
         }
 
@@ -155,7 +174,12 @@ class Orchestrator(
                 "الهدف: ${cp.goal}\n\nنتائج الخطوات:\n$all", 2048
             ) ?: return
             cp = cp.copy(finalAnswer = fin.first)
-            log("🏁 انتهى (${fin.second})")
+            log("🏁 انتهى (${fin.second})") // يحفظ الإجابة النهائية ضمن نقطة الاستئناف
         }
+    }
+
+    private companion object {
+        /** حد المحاولات الفاشلة لطلب واحد قبل التوقف (حتى لا تستمر المحاولة بلا نهاية عند خلل دائم). */
+        const val MAX_FAILURES = 20
     }
 }
