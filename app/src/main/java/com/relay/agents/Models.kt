@@ -25,7 +25,10 @@ enum class Provider(
         "https://api.cerebras.ai/v1/chat/completions"),
     HUGGINGFACE("Hugging Face (مجاني)", "meta-llama/Llama-3.3-70B-Instruct", "huggingface.co/settings/tokens", true,
         "https://router.huggingface.co/v1/chat/completions"),
-    WEB("وكيل ويب يدوي", "https://claude.ai", "", true, manual = true)
+    WEB("وكيل ويب يدوي", "https://claude.ai", "", true, manual = true);
+
+    /** يقبل الصور في الطلب (Claude وGemini). البقية تستلم وصفاً نصياً للصور يولّده وكيل رؤية. */
+    val vision: Boolean get() = this == CLAUDE || this == GEMINI
 }
 
 /** وكيل = اسم + مزوّد + مفتاح API + نموذج. */

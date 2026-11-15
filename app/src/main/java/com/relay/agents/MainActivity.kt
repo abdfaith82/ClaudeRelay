@@ -334,9 +334,37 @@ fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
 fun RunTab(vm: RelayViewModel) {
     var goal by remember { mutableStateOf("") }
     val cp = vm.checkpoint
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        vm.addFiles(uris)
+    }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             OutlinedTextField(goal, { goal = it }, label = { Text("الهدف / المهمة") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            OutlinedButton(
+                onClick = { picker.launch(arrayOf("*/*")) },
+                enabled = !vm.running && !vm.processing,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("📎 إرفاق ملفات (نص، صور، ZIP، PDF، فيديو)") }
+            if (vm.processing) {
+                Text("جارٍ تجهيز الملفات…", style = MaterialTheme.typography.bodySmall)
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+            vm.pending.forEachIndexed { i, a ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "• ${a.name} — ${a.note.ifEmpty { "${a.text.length} حرفاً" }}",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { vm.removePending(i) }, enabled = !vm.running) { Text("إزالة") }
+                }
+            }
+            if (vm.pending.isEmpty() && !vm.projectAttachments.isEmpty) {
+                Text(
+                    "مرفقات المشروع الحالي: ${vm.projectAttachments.items.joinToString { it.name }}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { vm.start(goal) }, enabled = !vm.running && vm.agents.any { it.enabled }) { Text("ابدأ") }
                 if (cp != null && cp.finalAnswer.isEmpty()) {

@@ -18,6 +18,7 @@ class Orchestrator(
     private val router = AgentRouter()
     private var cp = Checkpoint("")
     private var memory = ""
+    private var attachCtx = ""
 
     private fun publish() = onUpdate(cp, router.snapshot())
 
@@ -28,11 +29,23 @@ class Orchestrator(
     }
 
     /** ينفذ طلباً واحداً مع التبديل بين الوكلاء. يرجع (النص، اسم الوكيل) أو null عند الإلغاء/عدم وجود وكلاء. */
-    private suspend fun callWithFailover(baseSystem: String, user: String, maxTokens: Int): Pair<String, String>? {
-        val system = if (memory.isBlank()) baseSystem
-        else "$baseSystem\n\n--- ذاكرة المشاريع (للرجوع إليها والبناء عليها عند الصلة، لا تكررها) ---\n$memory"
+    private suspend fun callWithFailover(
+        baseSystem: String,
+        user: String,
+        maxTokens: Int,
+        images: List<ImageData> = emptyList(),
+        eligible: (AgentConfig) -> Boolean = { true },
+        withContext: Boolean = true
+    ): Pair<String, String>? {
+        val system = buildString {
+            append(baseSystem)
+            if (withContext && memory.isNotBlank())
+                append("\n\n--- ذاكرة المشاريع (للرجوع إليها والبناء عليها عند الصلة، لا تكررها) ---\n$memory")
+            if (withContext && attachCtx.isNotBlank())
+                append("\n\n--- مرفقات المهمة ---\n$attachCtx")
+        }
         while (coroutineContext.isActive) {
-            when (val p = router.pick()) {
+            when (val p = router.pick(eligible)) {
                 AgentRouter.Pick.None -> {
                     log("⛔ كل الوكلاء معطّلون (تحقق من المفاتيح والنماذج)")
                     return null
@@ -56,13 +69,13 @@ class Orchestrator(
                         router.park(a.id, 600_000, "تخطي")
                         continue
                     }
-                    when (val r = ClaudeClient.send(a, system, user, maxTokens)) {
+                    when (val r = ClaudeClient.send(a, system, user, maxTokens, images)) {
                         is ApiResult.Ok -> {
                             router.onSuccess(a.id)
                             return r.text to a.name
                         }
                         is ApiResult.Fail -> {
-                            val cool = router.onFailure(a.id, r.code, r.retryAfterMs, r.fatal)
+                            val cool = router.onFailure(a.id, r.code, r.retryAfterMs, r.fatal, r.message)
                             if (cool < 0) log("❌ ${a.name}: عُطّل (${r.code}: ${r.message.take(80)})")
                             else log("⚠️ ${a.name} توقف (${r.code}: ${r.message.take(80)}) — راحة ${cool / 1000}ث ويكمل الوكيل التالي")
                         }
@@ -92,11 +105,41 @@ class Orchestrator(
     }
 
     /** يبدأ هدفاً جديداً أو يكمل نقطة محفوظة. */
-    suspend fun run(goal: String, agents: List<AgentConfig>, resume: Checkpoint?, memory: String = "") {
+    suspend fun run(
+        goal: String,
+        agents: List<AgentConfig>,
+        resume: Checkpoint?,
+        memory: String = "",
+        attachments: AttachmentBundle = AttachmentBundle(),
+        onDigest: (String) -> Unit = {}
+    ) {
         this.memory = memory
         router.load(agents.filter { it.enabled && (it.apiKey.isNotBlank() || it.provider.manual) })
         cp = resume ?: Checkpoint(goal)
         if (router.size == 0) { log("⛔ لا يوجد وكلاء مفعّلون"); return }
+
+        // 0) المرفقات: وصف الصور/اللقطات مرة واحدة بوكيل رؤية (Claude/Gemini) ليستفيد منه كل الوكلاء.
+        var bundle = attachments
+        val images = bundle.allImages
+        if (images.isNotEmpty() && bundle.imageDigest.isEmpty()) {
+            if (router.hasEligible { it.provider.vision }) {
+                log("🖼️ تحليل ${images.size} صور/لقطات…")
+                val d = callWithFailover(
+                    baseSystem = "أنت محلل بصري. صف كل صورة بدقة وبالعربية: العناصر والنصوص الظاهرة والأبعاد التقريبية والألوان والتفاصيل المهمة لمشروع المستخدم. رقّم الصور بالترتيب.",
+                    user = "الهدف: $goal\nالملفات: ${bundle.items.joinToString { it.name }}",
+                    maxTokens = 1500, images = images,
+                    eligible = { it.provider.vision }, withContext = false
+                )
+                if (d != null) {
+                    bundle = bundle.copy(imageDigest = d.first.trim())
+                    onDigest(bundle.imageDigest)
+                    log("🖼️ تم وصف الصور بواسطة ${d.second}")
+                } else log("⚠️ تعذّر تحليل الصور؛ سيُكمل الفريق بدونها")
+            } else {
+                log("⚠️ لا يوجد وكيل رؤية (Claude أو Gemini) فارتباط الصور مهمل؛ أضف وكيل Gemini مجانياً لتحليلها")
+            }
+        }
+        attachCtx = bundle.toContext()
 
         // 1) التخطيط
         if (cp.steps.isEmpty()) {

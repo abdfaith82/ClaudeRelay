@@ -62,9 +62,13 @@ class AgentRouter(
 
     private fun availableAt(h: Health): Long = max(h.cooldownUntil, h.lastStart + minIntervalMs(h.agent.provider))
 
-    fun pick(): Pick {
+    fun hasEligible(eligible: (AgentConfig) -> Boolean): Boolean =
+        items.any { !it.disabled && eligible(it.agent) }
+
+    /** eligible: يحصر الاختيار بوكلاء معيّنين (مثل وكلاء الرؤية). */
+    fun pick(eligible: (AgentConfig) -> Boolean = { true }): Pick {
         val t = now()
-        val alive = items.filter { !it.disabled }
+        val alive = items.filter { !it.disabled && eligible(it.agent) }
         val auto = alive.filter { !it.agent.provider.manual }
 
         val ready = auto.filter { availableAt(it) <= t }.minByOrNull { it.lastStart }
@@ -93,11 +97,17 @@ class AgentRouter(
     }
 
     /** يرجع مدة الراحة بالمللي ثانية، أو -1 إن عُطّل الوكيل نهائياً. */
-    fun onFailure(id: String, code: Int, retryAfterMs: Long?, fatal: Boolean = code == 401 || code == 403): Long {
+    fun onFailure(
+        id: String, code: Int, retryAfterMs: Long?,
+        fatal: Boolean = code == 401 || code == 403,
+        message: String = ""
+    ): Long {
         val h = find(id) ?: return -1
+        val detail = message.replace('\n', ' ').take(90)
         if (fatal || code == 404) {
             h.disabled = true
-            h.note = if (code == 401 || code == 403) "مفتاح مرفوض" else "نموذج غير صالح (استخدم جلب النماذج)"
+            val why = if (code == 401 || code == 403) "مفتاح مرفوض" else "نموذج غير صالح (استخدم جلب النماذج)"
+            h.note = "$why [$code] $detail".trim()
             return -1
         }
         h.failures++
@@ -107,7 +117,7 @@ class AgentRouter(
             backoff(code, h.failures)
         }
         h.cooldownUntil = now() + cooldown
-        h.note = "راحة"
+        h.note = "راحة [$code] $detail".trim()
         return cooldown
     }
 
