@@ -76,6 +76,30 @@ data class Step(
     }
 }
 
+/** مشروع محفوظ = هدف + نقطة استئناف كاملة (خطوات ونتائج وسجل). */
+data class Project(
+    val id: String,
+    val name: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val checkpoint: Checkpoint
+) {
+    val completed: Boolean get() = checkpoint.finalAnswer.isNotEmpty()
+
+    fun toJson() = JSONObject()
+        .put("id", id).put("name", name)
+        .put("createdAt", createdAt).put("updatedAt", updatedAt)
+        .put("checkpoint", checkpoint.toJson())
+
+    companion object {
+        fun fromJson(o: JSONObject) = Project(
+            o.getString("id"), o.getString("name"),
+            o.optLong("createdAt"), o.optLong("updatedAt"),
+            Checkpoint.fromJson(o.getJSONObject("checkpoint"))
+        )
+    }
+}
+
 /** نقطة الاستئناف: تُحفظ بعد كل خطوة. */
 data class Checkpoint(
     val goal: String,

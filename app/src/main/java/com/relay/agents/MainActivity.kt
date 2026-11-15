@@ -1,6 +1,16 @@
 package com.relay.agents
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -136,8 +146,13 @@ fun RelayScreen(vm: RelayViewModel) {
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("الوكلاء") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("التشغيل") })
+            Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("المشاريع (${vm.projects.size})") })
         }
-        if (tab == 0) AgentsTab(vm) { loginUrl = it } else RunTab(vm)
+        when (tab) {
+            0 -> AgentsTab(vm) { loginUrl = it }
+            1 -> RunTab(vm)
+            else -> ProjectsTab(vm) { tab = 1 }
+        }
     }
 }
 
@@ -241,6 +256,73 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
                         OutlinedTextField(editModel, { editModel = it }, label = { Text("النموذج") },
                             modifier = Modifier.weight(1f), singleLine = true)
                         TextButton(onClick = { vm.updateModel(a.id, editModel); editing = false }) { Text("حفظ") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun writeToUri(ctx: Context, uri: Uri?, text: String?) {
+    if (uri == null || text == null) return
+    val ok = runCatching {
+        ctx.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) } != null
+    }.getOrDefault(false)
+    Toast.makeText(ctx, if (ok) "تم التصدير" else "تعذّر التصدير", Toast.LENGTH_SHORT).show()
+}
+
+@Composable
+fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
+    val ctx = LocalContext.current
+    var pending by remember { mutableStateOf<String?>(null) }
+    val mdLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        writeToUri(ctx, uri, pending); pending = null
+    }
+    val jsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        writeToUri(ctx, uri, pending); pending = null
+    }
+    val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US) }
+
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Text("كل المشاريع محفوظة تلقائياً، ويتعرف عليها الوكلاء كذاكرة ويبنون عليها في المهام الجديدة.",
+                style = MaterialTheme.typography.bodySmall)
+            Button(
+                onClick = { pending = vm.allProjectsJson(); jsonLauncher.launch("claude-relay-projects.json") },
+                enabled = vm.projects.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("تصدير كل المشاريع (JSON)") }
+        }
+        if (vm.projects.isEmpty()) {
+            item { Text("لا توجد مشاريع بعد. ابدأ مهمة من تبويب التشغيل.") }
+        }
+        items(vm.projects, key = { it.id }) { p ->
+            val steps = p.checkpoint.steps
+            val done = steps.count { it.status == StepStatus.DONE }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(p.name, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "${if (p.completed) "✅ مكتمل" else "⏸ غير مكتمل"} • $done/${steps.size} • ${fmt.format(Date(p.updatedAt))}" +
+                            if (p.id == vm.currentProjectId) " • الحالي" else "",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { if (vm.openProject(p.id)) onOpen() }, enabled = !vm.running) { Text("فتح") }
+                        TextButton(onClick = {
+                            pending = vm.markdownOf(p.id)
+                            mdLauncher.launch(ProjectExport.safeFileName(p.name, "md"))
+                        }) { Text("تصدير .md") }
+                        TextButton(onClick = {
+                            val text = vm.markdownOf(p.id) ?: return@TextButton
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, p.name)
+                                putExtra(Intent.EXTRA_TEXT, text)
+                            }
+                            ctx.startActivity(Intent.createChooser(send, "مشاركة المشروع"))
+                        }) { Text("مشاركة") }
+                        TextButton(onClick = { vm.deleteProject(p.id) }, enabled = !(vm.running && p.id == vm.currentProjectId)) { Text("حذف") }
                     }
                 }
             }

@@ -29,6 +29,12 @@ class Storage(private val ctx: Context) {
         tmp.renameTo(cpFile)
     }
 
+    fun currentProjectId(): String? = prefs.getString("currentProject", null)
+
+    fun setCurrentProjectId(id: String?) {
+        prefs.edit().putString("currentProject", id).apply()
+    }
+
     fun clearCheckpoint() {
         cpFile.delete()
     }

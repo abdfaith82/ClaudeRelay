@@ -17,6 +17,7 @@ class Orchestrator(
 ) {
     private val router = AgentRouter()
     private var cp = Checkpoint("")
+    private var memory = ""
 
     private fun publish() = onUpdate(cp, router.snapshot())
 
@@ -27,7 +28,9 @@ class Orchestrator(
     }
 
     /** ينفذ طلباً واحداً مع التبديل بين الوكلاء. يرجع (النص، اسم الوكيل) أو null عند الإلغاء/عدم وجود وكلاء. */
-    private suspend fun callWithFailover(system: String, user: String, maxTokens: Int): Pair<String, String>? {
+    private suspend fun callWithFailover(baseSystem: String, user: String, maxTokens: Int): Pair<String, String>? {
+        val system = if (memory.isBlank()) baseSystem
+        else "$baseSystem\n\n--- ذاكرة المشاريع (للرجوع إليها والبناء عليها عند الصلة، لا تكررها) ---\n$memory"
         while (coroutineContext.isActive) {
             when (val p = router.pick()) {
                 AgentRouter.Pick.None -> {
@@ -89,7 +92,8 @@ class Orchestrator(
     }
 
     /** يبدأ هدفاً جديداً أو يكمل نقطة محفوظة. */
-    suspend fun run(goal: String, agents: List<AgentConfig>, resume: Checkpoint?) {
+    suspend fun run(goal: String, agents: List<AgentConfig>, resume: Checkpoint?, memory: String = "") {
+        this.memory = memory
         router.load(agents.filter { it.enabled && (it.apiKey.isNotBlank() || it.provider.manual) })
         cp = resume ?: Checkpoint(goal)
         if (router.size == 0) { log("⛔ لا يوجد وكلاء مفعّلون"); return }
@@ -101,7 +105,7 @@ class Orchestrator(
             var by = ""
             for (attempt in 1..2) {
                 val plan = callWithFailover(
-                    system = "أنت منسّق مهام. قسّم الهدف إلى 3 إلى 6 خطوات قصيرة ومتسلسلة. أجب بمصفوفة JSON من النصوص فقط دون أي شرح، مثال: [\"خطوة 1\",\"خطوة 2\",\"خطوة 3\"]",
+                    baseSystem = "أنت منسّق مهام. قسّم الهدف إلى 3 إلى 6 خطوات قصيرة ومتسلسلة. أجب بمصفوفة JSON من النصوص فقط دون أي شرح، مثال: [\"خطوة 1\",\"خطوة 2\",\"خطوة 3\"]",
                     user = "الهدف: ${cp.goal}" + if (attempt == 2) "\n\nأعد الإجابة الآن كمصفوفة JSON فقط." else "",
                     maxTokens = 2048
                 ) ?: return
