@@ -27,9 +27,9 @@ class ProjectMemoryTest {
             listOf(project("1", "تصميم مطبخ حديث", "نتيجة نهائية"), project("2", "تطبيق حسابات")),
             "شيء آخر"
         )
-        assertTrue(m.contains("مكتمل"))
-        assertTrue(m.contains("غير مكتمل 1/1"))
-        assertFalse(m.contains("مقتطفات"))
+        assertTrue(m.contains("[complete]"))
+        assertTrue(m.contains("[incomplete 1/1]"))
+        assertFalse(m.contains("Excerpts"))
     }
 
     @Test
@@ -38,7 +38,7 @@ class ProjectMemoryTest {
             listOf(project("1", "تصميم مطبخ حديث", "التفاصيل المهمة للمطبخ")),
             "تصميم مطبخ ثاني"
         )
-        assertTrue(m.contains("مقتطفات"))
+        assertTrue(m.contains("Excerpts"))
         assertTrue(m.contains("التفاصيل المهمة للمطبخ"))
     }
 
@@ -52,9 +52,9 @@ class ProjectMemoryTest {
     @Test
     fun markdownContainsSections() {
         val md = ProjectExport.toMarkdown(project("x", "هدف المشروع", "الخلاصة"))
-        assertTrue(md.contains("## الهدف"))
-        assertTrue(md.contains("### 1. خطوة أولى (بواسطة A)"))
-        assertTrue(md.contains("## النتيجة النهائية"))
+        assertTrue(md.contains("## Goal"))
+        assertTrue(md.contains("### 1. خطوة أولى (by A)"))
+        assertTrue(md.contains("## Final result"))
     }
 
     @Test

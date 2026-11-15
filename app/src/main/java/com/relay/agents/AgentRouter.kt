@@ -106,7 +106,7 @@ class AgentRouter(
         val detail = message.replace('\n', ' ').take(90)
         if (fatal || code == 404) {
             h.disabled = true
-            val why = if (code == 401 || code == 403) "مفتاح مرفوض" else "نموذج غير صالح (استخدم جلب النماذج)"
+            val why = if (code == 401 || code == 403) "Key rejected" else "Invalid model (use Fetch models)"
             h.note = "$why [$code] $detail".trim()
             return -1
         }
@@ -117,7 +117,7 @@ class AgentRouter(
             backoff(code, h.failures)
         }
         h.cooldownUntil = now() + cooldown
-        h.note = "راحة [$code] $detail".trim()
+        h.note = "Cooling [$code] $detail".trim()
         return cooldown
     }
 

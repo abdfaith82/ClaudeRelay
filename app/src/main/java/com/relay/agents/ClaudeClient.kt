@@ -46,7 +46,7 @@ object ClaudeClient {
             val raw = stream?.bufferedReader()?.use { it.readText() } ?: ""
             if (code in 200..299) {
                 val text = parse(agent.provider, JSONObject(raw))
-                if (text.isBlank()) ApiResult.Fail(0, "رد فارغ", fatal = false) else ApiResult.Ok(text)
+                if (text.isBlank()) ApiResult.Fail(0, "Empty reply", fatal = false) else ApiResult.Ok(text)
             } else {
                 val retryAfter = conn.getHeaderField("retry-after")?.trim()?.toDoubleOrNull()
                     ?.let { (it * 1000).toLong() }
@@ -72,7 +72,7 @@ object ClaudeClient {
                         mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01")
                     Provider.GEMINI -> "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200" to
                         mapOf("x-goog-api-key" to apiKey)
-                    Provider.WEB -> error("لا ينطبق على وكيل الويب")
+                    Provider.WEB -> error("Not applicable to the web agent")
                     else -> provider.endpoint.replace("/chat/completions", "/models") to
                         mapOf("Authorization" to "Bearer $apiKey")
                 }
@@ -143,7 +143,7 @@ object ClaudeClient {
                         .put("generationConfig", JSONObject().put("maxOutputTokens", maxOf(maxTokens * 3, 4096)))
                 )
             }
-            Provider.WEB -> error("وكيل الويب يدوي ولا يُستدعى عبر API")
+            Provider.WEB -> error("The web agent is manual and is not called via API")
             Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE -> Req(
                 a.provider.endpoint,
                 mapOf("Authorization" to "Bearer ${a.apiKey}"),

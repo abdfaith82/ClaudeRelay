@@ -120,11 +120,11 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- التشغيل والمشاريع ----------
 
-    fun start(goal: String, coding: Boolean = false) {
+    fun start(goal: String, coding: Boolean = false, thinking: Boolean = false) {
         if (running || goal.isBlank()) return
         val g = goal.trim()
         val now = System.currentTimeMillis()
-        val p = Project(UUID.randomUUID().toString(), g.take(50), now, now, Checkpoint(g, coding = coding))
+        val p = Project(UUID.randomUUID().toString(), g.take(50), now, now, Checkpoint(g, coding = coding, thinking = thinking))
         current = p
         storage.setCurrentProjectId(p.id)
         store.save(p)
@@ -230,7 +230,7 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
                 persist(cp)
             }
             try {
-                orch.run(goal, agents, resume, memory, bundle, (resume ?: checkpoint)?.coding ?: false) { digest ->
+                orch.run(goal, agents, resume, memory, bundle, (resume ?: checkpoint)?.coding ?: false, (resume ?: checkpoint)?.thinking ?: false) { digest ->
                     projectAttachments = projectAttachments.copy(imageDigest = digest)
                     current?.let { attStore.save(it.id, projectAttachments) }
                 }

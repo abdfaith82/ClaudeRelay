@@ -48,15 +48,15 @@ object MemoryBuilder {
             .take(2).map { it.first }
 
         return buildString {
-            append("المشاريع السابقة المحفوظة (${projects.size}):\n")
+            append("Saved previous projects (${projects.size}):\n")
             sorted.take(maxList).forEach { p ->
                 val steps = p.checkpoint.steps
                 val done = steps.count { it.status == StepStatus.DONE }
-                val status = if (p.completed) "مكتمل" else "غير مكتمل $done/${steps.size}"
+                val status = if (p.completed) "complete" else "incomplete $done/${steps.size}"
                 append("- ${p.name} [$status]: ${p.checkpoint.goal.take(160)}\n")
             }
             if (relevant.isNotEmpty()) {
-                append("\nمقتطفات من مشاريع مشابهة:\n")
+                append("\nExcerpts from similar projects:\n")
                 relevant.forEach { append("### ${it.name}\n${it.checkpoint.finalAnswer.take(900)}\n") }
             }
         }.take(4000)
@@ -71,20 +71,20 @@ object ProjectExport {
     fun toMarkdown(p: Project): String = buildString {
         val c = p.checkpoint
         append("# ${p.name}\n\n")
-        append("- أُنشئ: ${date(p.createdAt)}\n- آخر تحديث: ${date(p.updatedAt)}\n")
-        append("- الحالة: ${if (p.completed) "مكتمل" else "غير مكتمل"}\n\n")
-        append("## الهدف\n\n${c.goal}\n\n")
+        append("- Created: ${date(p.createdAt)}\n- Last updated: ${date(p.updatedAt)}\n")
+        append("- Status: ${if (p.completed) "Complete" else "Incomplete"}\n\n")
+        append("## Goal\n\n${c.goal}\n\n")
         if (c.steps.isNotEmpty()) {
-            append("## الخطوات\n\n")
+            append("## Steps\n\n")
             c.steps.forEachIndexed { i, s ->
                 append("### ${i + 1}. ${s.title}")
-                if (s.doneBy.isNotEmpty()) append(" (بواسطة ${s.doneBy})")
+                if (s.doneBy.isNotEmpty()) append(" (by ${s.doneBy})")
                 append("\n\n")
-                append(if (s.status == StepStatus.DONE) s.result else "_لم تُنفَّذ بعد_")
+                append(if (s.status == StepStatus.DONE) s.result else "_Not executed yet_")
                 append("\n\n")
             }
         }
-        if (c.finalAnswer.isNotEmpty()) append("## النتيجة النهائية\n\n${c.finalAnswer}\n")
+        if (c.finalAnswer.isNotEmpty()) append("## Final result\n\n${c.finalAnswer}\n")
     }
 
     fun allToJson(list: List<Project>): String =

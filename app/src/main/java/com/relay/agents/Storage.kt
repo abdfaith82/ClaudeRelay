@@ -12,11 +12,26 @@ class Storage(private val ctx: Context) {
 
     fun loadAgents(): List<AgentConfig> = runCatching {
         val arr = JSONArray(prefs.getString("agents", "[]"))
-        (0 until arr.length()).map { AgentConfig.fromJson(arr.getJSONObject(it)) }
-    }.getOrDefault(emptyList())
+        (0 until arr.length()).map {
+            AgentConfig.fromJson(arr.getJSONObject(it)).let { a -> a.copy(apiKey = SecretStore.decrypt(a.apiKey)) }
+        }
+    }.getOrDefault(emptyList()).also { list ->
+        // ترحيل المفاتيح القديمة غير المشفّرة إلى التشفير مرة واحدة.
+        if (list.isNotEmpty() && prefs.getString("agents", "")?.contains("\"apiKey\":\"enc1:") != true &&
+            list.any { it.apiKey.isNotEmpty() }
+        ) saveAgents(list)
+    }
 
     fun saveAgents(list: List<AgentConfig>) {
-        prefs.edit().putString("agents", JSONArray(list.map { it.toJson() }).toString()).apply()
+        val arr = JSONArray(list.map { it.copy(apiKey = SecretStore.encrypt(it.apiKey)).toJson() })
+        prefs.edit().putString("agents", arr.toString()).apply()
+    }
+
+    // ---------- إعدادات التطبيق (اللغة والمظهر) ----------
+    fun setting(name: String, default: String): String = prefs.getString("set_$name", default) ?: default
+
+    fun saveSetting(name: String, value: String) {
+        prefs.edit().putString("set_$name", value).apply()
     }
 
     fun loadCheckpoint(): Checkpoint? = runCatching {

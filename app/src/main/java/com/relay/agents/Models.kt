@@ -10,22 +10,22 @@ enum class Provider(
     val keyUrl: String,
     val free: Boolean,
     val endpoint: String = "",
-    /** manual = وكيل ويب يدوي: يفتح موقع الدردشة داخل التطبيق ويلصق المستخدم الرد بنفسه (حقل model يحمل رابط الموقع). */
+    /** manual = Web agent (manual): يفتح موقع الدردشة داخل التطبيق ويلصق المستخدم الرد بنفسه (حقل model يحمل رابط الموقع). */
     val manual: Boolean = false
 ) {
     CLAUDE("Claude", "claude-sonnet-4-5", "console.anthropic.com", false),
-    GEMINI("Gemini (مجاني)", "gemini-flash-latest", "aistudio.google.com/apikey", true),
-    GROQ("Groq (مجاني)", "llama-3.3-70b-versatile", "console.groq.com/keys", true,
+    GEMINI("Gemini (free)", "gemini-flash-latest", "aistudio.google.com/apikey", true),
+    GROQ("Groq (free)", "llama-3.3-70b-versatile", "console.groq.com/keys", true,
         "https://api.groq.com/openai/v1/chat/completions"),
-    OPENROUTER("OpenRouter (مجاني)", "meta-llama/llama-3.3-70b-instruct:free", "openrouter.ai/keys", true,
+    OPENROUTER("OpenRouter (free)", "meta-llama/llama-3.3-70b-instruct:free", "openrouter.ai/keys", true,
         "https://openrouter.ai/api/v1/chat/completions"),
-    MISTRAL("Mistral (مجاني)", "mistral-small-latest", "console.mistral.ai/api-keys", true,
+    MISTRAL("Mistral (free)", "mistral-small-latest", "console.mistral.ai/api-keys", true,
         "https://api.mistral.ai/v1/chat/completions"),
-    CEREBRAS("Cerebras (مجاني)", "llama-3.3-70b", "cloud.cerebras.ai", true,
+    CEREBRAS("Cerebras (free)", "llama-3.3-70b", "cloud.cerebras.ai", true,
         "https://api.cerebras.ai/v1/chat/completions"),
-    HUGGINGFACE("Hugging Face (مجاني)", "meta-llama/Llama-3.3-70B-Instruct", "huggingface.co/settings/tokens", true,
+    HUGGINGFACE("Hugging Face (free)", "meta-llama/Llama-3.3-70B-Instruct", "huggingface.co/settings/tokens", true,
         "https://router.huggingface.co/v1/chat/completions"),
-    WEB("وكيل ويب يدوي", "https://claude.ai", "", true, manual = true);
+    WEB("Web agent (manual)", "https://claude.ai", "", true, manual = true);
 
     /** يقبل الصور في الطلب (Claude وGemini). البقية تستلم وصفاً نصياً للصور يولّده وكيل رؤية. */
     val vision: Boolean get() = this == CLAUDE || this == GEMINI
@@ -110,7 +110,9 @@ data class Checkpoint(
     val finalAnswer: String = "",
     val log: List<String> = emptyList(),
     /** وضع البرمجة: تخطيط هندسي وملفات كاملة وقابلة للتصدير كـ ZIP. */
-    val coding: Boolean = false
+    val coding: Boolean = false,
+    /** وضع التفكير العميق: لكل خطوة مسودة ← نقد من وكيل آخر ← تحسين. */
+    val thinking: Boolean = false
 ) {
     val nextIndex: Int get() = steps.indexOfFirst { it.status == StepStatus.PENDING }
     val finished: Boolean get() = steps.isNotEmpty() && nextIndex == -1
@@ -121,6 +123,7 @@ data class Checkpoint(
         .put("finalAnswer", finalAnswer)
         .put("log", JSONArray(log.takeLast(200)))
         .put("coding", coding)
+        .put("thinking", thinking)
 
     companion object {
         fun fromJson(o: JSONObject): Checkpoint {
@@ -131,7 +134,8 @@ data class Checkpoint(
                 steps = (0 until sa.length()).map { Step.fromJson(sa.getJSONObject(it)) },
                 finalAnswer = o.optString("finalAnswer"),
                 log = (0 until la.length()).map { la.getString(it) },
-                coding = o.optBoolean("coding", false)
+                coding = o.optBoolean("coding", false),
+                thinking = o.optBoolean("thinking", false)
             )
         }
     }

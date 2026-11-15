@@ -69,9 +69,9 @@ data class AttachmentBundle(
         if (items.isEmpty()) return ""
         var left = budget
         return buildString {
-            append("المرفقات التي قدّمها المستخدم:\n")
+            append("Files provided by the user:\n")
             items.forEach { a ->
-                append("- ${a.name} (${a.mime.ifEmpty { "؟" }}, ${a.sizeBytes / 1024} KB)")
+                append("- ${a.name} (${a.mime.ifEmpty { "?" }}, ${a.sizeBytes / 1024} KB)")
                 if (a.note.isNotEmpty()) append(" — ${a.note}")
                 append("\n")
             }
@@ -79,9 +79,9 @@ data class AttachmentBundle(
                 if (left <= 0) return@forEach
                 val chunk = a.text.take(minOf(left, 8_000))
                 left -= chunk.length
-                append("\n[محتوى ${a.name}]\n$chunk\n")
+                append("\n[Content of ${a.name}]\n$chunk\n")
             }
-            if (imageDigest.isNotEmpty()) append("\n[وصف الصور واللقطات المرفقة]\n${imageDigest.take(4_000)}\n")
+            if (imageDigest.isNotEmpty()) append("\n[Description of attached images/frames]\n${imageDigest.take(4_000)}\n")
         }
     }
 
@@ -128,9 +128,9 @@ class AttachmentProcessor(private val ctx: Context) {
                 ext == "pdf" || mime == "application/pdf" -> pdfAttachment(uri, name, mime, size)
                 mime.startsWith("video/") -> videoAttachment(uri, name, mime, size)
                 mime.startsWith("text/") || ext in TEXT_EXT || mime in TEXT_MIMES -> textAttachment(uri, name, mime, size)
-                else -> Attachment(name, mime, size, note = "ملف ثنائي: لا يمكن قراءة محتواه، تُعرف الأسماء والحجم فقط")
+                else -> Attachment(name, mime, size, note = "Binary file: content not readable, only name and size are known")
             }
-        }.getOrElse { Attachment(name, mime, size, note = "تعذّرت معالجة الملف: ${it.message?.take(80)}") }
+        }.getOrElse { Attachment(name, mime, size, note = "Could not process the file: ${it.message?.take(80)}") }
     }
 
     private fun nameAndSize(uri: Uri): Pair<String, Long> {
@@ -164,16 +164,16 @@ class AttachmentProcessor(private val ctx: Context) {
     // ---------- نص ----------
     private fun textAttachment(uri: Uri, name: String, mime: String, size: Long): Attachment {
         val bytes = ctx.contentResolver.openInputStream(uri)?.use { readCapped(it, MAX_TEXT_BYTES) } ?: ByteArray(0)
-        if (looksBinary(bytes)) return Attachment(name, mime, size, note = "يبدو ثنائياً، لم يُقرأ كنص")
+        if (looksBinary(bytes)) return Attachment(name, mime, size, note = "Looks binary, not read as text")
         val truncated = size > MAX_TEXT_BYTES
         return Attachment(name, mime, size, text = String(bytes, Charsets.UTF_8),
-            note = if (truncated) "قُطع عند ${MAX_TEXT_BYTES / 1024} KB" else "")
+            note = if (truncated) "Truncated at ${MAX_TEXT_BYTES / 1024} KB" else "")
     }
 
     // ---------- صورة ----------
     private fun imageAttachment(uri: Uri, name: String, mime: String, size: Long): Attachment {
-        val bmp = decodeSampled(uri) ?: return Attachment(name, mime, size, note = "تعذّر فك الصورة")
-        return Attachment(name, mime, size, images = listOf(toJpeg(bmp)), note = "صورة ${bmp.width}×${bmp.height} (مصغّرة للتحليل)")
+        val bmp = decodeSampled(uri) ?: return Attachment(name, mime, size, note = "Could not decode the image")
+        return Attachment(name, mime, size, images = listOf(toJpeg(bmp)), note = "Image ${bmp.width}×${bmp.height} (downscaled for analysis)")
     }
 
     private fun decodeSampled(uri: Uri): Bitmap? {
@@ -233,9 +233,9 @@ class AttachmentProcessor(private val ctx: Context) {
             }
         }
         val note = buildString {
-            append("أرشيف ZIP: $entries عنصراً")
-            if (images.isNotEmpty()) append("، ${images.size} صور مستخرجة")
-            if (others.isNotEmpty()) append(". ملفات غير مقروءة: ${others.take(25).joinToString(", ")}")
+            append("ZIP archive: $entries entries")
+            if (images.isNotEmpty()) append(", ${images.size} images extracted")
+            if (others.isNotEmpty()) append(". Unreadable files: ${others.take(25).joinToString(", ")}")
         }
         return Attachment(name, mime, size, text = sb.toString(), images = images, note = note)
     }
@@ -243,7 +243,7 @@ class AttachmentProcessor(private val ctx: Context) {
     // ---------- PDF ----------
     private fun pdfAttachment(uri: Uri, name: String, mime: String, size: Long): Attachment {
         val pfd: ParcelFileDescriptor = ctx.contentResolver.openFileDescriptor(uri, "r")
-            ?: return Attachment(name, mime, size, note = "تعذّر فتح PDF")
+            ?: return Attachment(name, mime, size, note = "Could not open the PDF")
         val images = mutableListOf<ImageData>()
         var pages = 0
         PdfRenderer(pfd).use { r ->
@@ -260,7 +260,7 @@ class AttachmentProcessor(private val ctx: Context) {
             }
         }
         return Attachment(name, mime, size, images = images,
-            note = "PDF من $pages صفحة؛ حُوّلت أول ${images.size} صفحات إلى صور للتحليل (النص غير مستخرج)")
+            note = "PDF with $pages pages; first ${images.size} pages rendered as images for analysis (text not extracted)")
     }
 
     // ---------- فيديو ----------
@@ -279,7 +279,7 @@ class AttachmentProcessor(private val ctx: Context) {
                 }
             }
             return Attachment(name, mime, size, images = images,
-                note = "فيديو ${ms / 1000}ث ${w ?: "?"}×${h ?: "?"}؛ ${images.size} لقطات موزعة على مدته. الصوت غير مفرّغ")
+                note = "Video ${ms / 1000}s ${w ?: "?"}×${h ?: "?"}; ${images.size} frames spread over its duration. Audio is not transcribed")
         } finally {
             runCatching { mmr.release() }
         }
