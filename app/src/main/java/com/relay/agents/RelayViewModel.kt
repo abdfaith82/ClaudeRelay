@@ -120,11 +120,11 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- التشغيل والمشاريع ----------
 
-    fun start(goal: String) {
+    fun start(goal: String, coding: Boolean = false) {
         if (running || goal.isBlank()) return
         val g = goal.trim()
         val now = System.currentTimeMillis()
-        val p = Project(UUID.randomUUID().toString(), g.take(50), now, now, Checkpoint(g))
+        val p = Project(UUID.randomUUID().toString(), g.take(50), now, now, Checkpoint(g, coding = coding))
         current = p
         storage.setCurrentProjectId(p.id)
         store.save(p)
@@ -185,6 +185,21 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         refreshProjects()
     }
 
+    /** ملفات الشيفرة المستخرجة من مشروع (وضع البرمجة). */
+    fun codeFiles(id: String): Map<String, String> =
+        store.load(id)?.let { p -> CodeExtractor.extract(p.checkpoint.steps.map { it.result }) } ?: emptyMap()
+
+    /** نسخة احتياطية مشفّرة بكلمة مرور (المفاتيح داخلها) لاستعادة الوكلاء بعد إعادة التثبيت. */
+    fun exportAgentsBackup(pass: String): String = BackupCrypto.encrypt(AgentBackup.toJson(agents), pass)
+
+    fun importAgentsBackup(text: String, pass: String): Result<Int> = runCatching {
+        val incoming = AgentBackup.fromJson(BackupCrypto.decrypt(text, pass))
+        val (merged, added) = AgentBackup.merge(agents, incoming)
+        agents = merged
+        storage.saveAgents(agents)
+        added
+    }
+
     fun markdownOf(id: String): String? = store.load(id)?.let { ProjectExport.toMarkdown(it) }
 
     fun allProjectsJson(): String = ProjectExport.allToJson(store.list())
@@ -215,7 +230,7 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
                 persist(cp)
             }
             try {
-                orch.run(goal, agents, resume, memory, bundle) { digest ->
+                orch.run(goal, agents, resume, memory, bundle, (resume ?: checkpoint)?.coding ?: false) { digest ->
                     projectAttachments = projectAttachments.copy(imageDigest = digest)
                     current?.let { attStore.save(it.id, projectAttachments) }
                 }

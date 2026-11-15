@@ -108,7 +108,9 @@ data class Checkpoint(
     val goal: String,
     val steps: List<Step> = emptyList(),
     val finalAnswer: String = "",
-    val log: List<String> = emptyList()
+    val log: List<String> = emptyList(),
+    /** وضع البرمجة: تخطيط هندسي وملفات كاملة وقابلة للتصدير كـ ZIP. */
+    val coding: Boolean = false
 ) {
     val nextIndex: Int get() = steps.indexOfFirst { it.status == StepStatus.PENDING }
     val finished: Boolean get() = steps.isNotEmpty() && nextIndex == -1
@@ -118,6 +120,7 @@ data class Checkpoint(
         .put("steps", JSONArray(steps.map { it.toJson() }))
         .put("finalAnswer", finalAnswer)
         .put("log", JSONArray(log.takeLast(200)))
+        .put("coding", coding)
 
     companion object {
         fun fromJson(o: JSONObject): Checkpoint {
@@ -127,7 +130,8 @@ data class Checkpoint(
                 goal = o.getString("goal"),
                 steps = (0 until sa.length()).map { Step.fromJson(sa.getJSONObject(it)) },
                 finalAnswer = o.optString("finalAnswer"),
-                log = (0 until la.length()).map { la.getString(it) }
+                log = (0 until la.length()).map { la.getString(it) },
+                coding = o.optBoolean("coding", false)
             )
         }
     }

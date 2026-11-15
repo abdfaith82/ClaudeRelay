@@ -15,6 +15,18 @@ android {
         versionName = "1.0"
     }
 
+    // مفتاح توقيع ثابت للنسخ التجريبية: كل بناء على GitHub Actions يوقَّع بنفس المفتاح،
+    // فيُثبَّت التحديث فوق النسخة القديمة وتبقى بيانات التطبيق (الوكلاء والمشاريع).
+    // (مفتاح debug عام وللاستخدام الشخصي فقط؛ لا تنشر التطبيق به.)
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

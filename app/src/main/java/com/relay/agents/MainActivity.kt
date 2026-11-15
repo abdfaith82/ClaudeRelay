@@ -165,6 +165,54 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
     var found by remember { mutableStateOf<List<String>>(emptyList()) }
     var msg by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val ctx = LocalContext.current
+    var dialog by remember { mutableStateOf<String?>(null) }
+    var pass by remember { mutableStateOf("") }
+    var restoreText by remember { mutableStateOf<String?>(null) }
+    var backupText by remember { mutableStateOf<String?>(null) }
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        writeToUri(ctx, uri, backupText); backupText = null
+    }
+    val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            restoreText = runCatching {
+                ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull()
+            if (restoreText != null) { pass = ""; dialog = "restore" }
+            else Toast.makeText(ctx, "تعذّر قراءة الملف", Toast.LENGTH_SHORT).show()
+        }
+    }
+    if (dialog != null) {
+        AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text(if (dialog == "backup") "نسخة احتياطية مشفّرة" else "استعادة الوكلاء") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (dialog == "backup") "المفاتيح تُشفَّر بكلمة مرور تختارها (4 أحرف فأكثر). لا يمكن استرجاعها إن نسيتها."
+                        else "أدخل كلمة مرور النسخة الاحتياطية.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(pass, { pass = it }, label = { Text("كلمة المرور") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation())
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = pass.length >= 4, onClick = {
+                    if (dialog == "backup") {
+                        backupText = vm.exportAgentsBackup(pass)
+                        saveLauncher.launch("claude-relay-agents.relay")
+                    } else {
+                        vm.importAgentsBackup(restoreText ?: "", pass)
+                            .onSuccess { Toast.makeText(ctx, "تمت الاستعادة: $it وكيل جديد", Toast.LENGTH_LONG).show() }
+                            .onFailure { Toast.makeText(ctx, "كلمة المرور خاطئة أو الملف تالف", Toast.LENGTH_LONG).show() }
+                    }
+                    dialog = null; pass = ""
+                }) { Text("تأكيد") }
+            },
+            dismissButton = { TextButton(onClick = { dialog = null }) { Text("إلغاء") } }
+        )
+    }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Text("اختر المزوّد وأضف مفتاحه. المزوّدون المجانيون يعطونك مفتاحاً مجانياً من موقعهم. كل وكيل بمفتاح مستقل، وإذا توقف يكمل التالي.",
@@ -231,6 +279,12 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
                     Text("تسجيل الدخول الآن")
                 }
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { pass = ""; dialog = "backup" }, enabled = vm.agents.isNotEmpty()) {
+                    Text("💾 حفظ الوكلاء")
+                }
+                OutlinedButton(onClick = { openLauncher.launch(arrayOf("*/*")) }) { Text("♻️ استعادة") }
+            }
             Divider()
         }
         items(vm.agents, key = { it.id }) { a ->
@@ -271,9 +325,21 @@ private fun writeToUri(ctx: Context, uri: Uri?, text: String?) {
     Toast.makeText(ctx, if (ok) "تم التصدير" else "تعذّر التصدير", Toast.LENGTH_SHORT).show()
 }
 
+private fun writeZipToUri(ctx: Context, uri: Uri?, files: Map<String, String>?) {
+    if (uri == null || files == null) return
+    val ok = runCatching {
+        ctx.contentResolver.openOutputStream(uri)?.use { CodeExtractor.writeZip(files, it) } != null
+    }.getOrDefault(false)
+    Toast.makeText(ctx, if (ok) "تم تصدير المشروع" else "تعذّر التصدير", Toast.LENGTH_SHORT).show()
+}
+
 @Composable
 fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
     val ctx = LocalContext.current
+    var pendingZip by remember { mutableStateOf<Map<String, String>?>(null) }
+    val zipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        writeZipToUri(ctx, uri, pendingZip); pendingZip = null
+    }
     var pending by remember { mutableStateOf<String?>(null) }
     val mdLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
         writeToUri(ctx, uri, pending); pending = null
@@ -299,6 +365,7 @@ fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
         items(vm.projects, key = { it.id }) { p ->
             val steps = p.checkpoint.steps
             val done = steps.count { it.status == StepStatus.DONE }
+            val codeCount = remember(p.updatedAt) { if (p.checkpoint.coding) vm.codeFiles(p.id).size else 0 }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(p.name, style = MaterialTheme.typography.titleSmall)
@@ -322,6 +389,12 @@ fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
                             }
                             ctx.startActivity(Intent.createChooser(send, "مشاركة المشروع"))
                         }) { Text("مشاركة") }
+                        if (codeCount > 0) {
+                            TextButton(onClick = {
+                                pendingZip = vm.codeFiles(p.id)
+                                zipLauncher.launch(ProjectExport.safeFileName(p.name, "zip"))
+                            }) { Text("كود ZIP ($codeCount)") }
+                        }
                         TextButton(onClick = { vm.deleteProject(p.id) }, enabled = !(vm.running && p.id == vm.currentProjectId)) { Text("حذف") }
                     }
                 }
@@ -333,6 +406,7 @@ fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
 @Composable
 fun RunTab(vm: RelayViewModel) {
     var goal by remember { mutableStateOf("") }
+    var coding by remember { mutableStateOf(false) }
     val cp = vm.checkpoint
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         vm.addFiles(uris)
@@ -340,6 +414,16 @@ fun RunTab(vm: RelayViewModel) {
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             OutlinedTextField(goal, { goal = it }, label = { Text("الهدف / المهمة") }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("💻 وضع البرمجة", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "تخطيط هندسي، ملفات كاملة بمسارات، مراجعة وإصلاح، ثم تصدير المشروع ZIP",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Switch(checked = coding, onCheckedChange = { coding = it }, enabled = !vm.running)
+            }
             OutlinedButton(
                 onClick = { picker.launch(arrayOf("*/*")) },
                 enabled = !vm.running && !vm.processing,
@@ -366,7 +450,7 @@ fun RunTab(vm: RelayViewModel) {
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.start(goal) }, enabled = !vm.running && vm.agents.any { it.enabled }) { Text("ابدأ") }
+                Button(onClick = { vm.start(goal, coding) }, enabled = !vm.running && vm.agents.any { it.enabled }) { Text("ابدأ") }
                 if (cp != null && cp.finalAnswer.isEmpty()) {
                     OutlinedButton(onClick = { vm.resume() }, enabled = !vm.running) { Text("استئناف") }
                 }

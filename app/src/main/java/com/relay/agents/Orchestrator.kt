@@ -15,6 +15,14 @@ class Orchestrator(
     private val askManual: suspend (AgentConfig, String) -> String?,
     private val onUpdate: (Checkpoint, List<AgentState>) -> Unit
 ) {
+    companion object {
+        const val CODING_SYSTEM =
+            "أنت مهندس برمجيات خبير ضمن فريق. اكتب شيفرة كاملة وقابلة للتشغيل دون اختصارات أو \"...\" أو تعليقات بديلة عن الكود. " +
+                "لكل ملف استخدم كتلة بهذه الصيغة بالضبط: ```file:المسار/الاسم.امتداد ثم الشيفرة ثم ```. " +
+                "عند تعديل ملف سابق أعد كتابته كاملاً بنفس المسار. التزم بالإصدارات والواجهات المقررة في الخطوات السابقة، " +
+                "واشرح باختصار شديد خارج كتل الملفات."
+    }
+
     private val router = AgentRouter()
     private var cp = Checkpoint("")
     private var memory = ""
@@ -111,11 +119,12 @@ class Orchestrator(
         resume: Checkpoint?,
         memory: String = "",
         attachments: AttachmentBundle = AttachmentBundle(),
+        coding: Boolean = false,
         onDigest: (String) -> Unit = {}
     ) {
         this.memory = memory
         router.load(agents.filter { it.enabled && (it.apiKey.isNotBlank() || it.provider.manual) })
-        cp = resume ?: Checkpoint(goal)
+        cp = resume ?: Checkpoint(goal, coding = coding)
         if (router.size == 0) { log("⛔ لا يوجد وكلاء مفعّلون"); return }
 
         // 0) المرفقات: وصف الصور/اللقطات مرة واحدة بوكيل رؤية (Claude/Gemini) ليستفيد منه كل الوكلاء.
@@ -148,7 +157,10 @@ class Orchestrator(
             var by = ""
             for (attempt in 1..2) {
                 val plan = callWithFailover(
-                    baseSystem = "أنت منسّق مهام. قسّم الهدف إلى 3 إلى 6 خطوات قصيرة ومتسلسلة. أجب بمصفوفة JSON من النصوص فقط دون أي شرح، مثال: [\"خطوة 1\",\"خطوة 2\",\"خطوة 3\"]",
+                    baseSystem = if (cp.coding)
+                        "أنت مهندس برمجيات رئيسي. قسّم المشروع البرمجي إلى 4 إلى 7 خطوات هندسية متسلسلة: تصميم المعمارية وقائمة الملفات والإصدارات أولاً، ثم تنفيذ كل جزء بملفاته، وأخيراً مراجعة الشيفرة وإصلاح الأخطاء. أجب بمصفوفة JSON من النصوص فقط دون أي شرح، مثال: [\"خطوة 1\",\"خطوة 2\"]"
+                    else
+                        "أنت منسّق مهام. قسّم الهدف إلى 3 إلى 6 خطوات قصيرة ومتسلسلة. أجب بمصفوفة JSON من النصوص فقط دون أي شرح، مثال: [\"خطوة 1\",\"خطوة 2\",\"خطوة 3\"]",
                     user = "الهدف: ${cp.goal}" + if (attempt == 2) "\n\nأعد الإجابة الآن كمصفوفة JSON فقط." else "",
                     maxTokens = 2048
                 ) ?: return
@@ -158,6 +170,9 @@ class Orchestrator(
                 log("⚠️ رد غير مفهوم من ${plan.second} (محاولة $attempt): ${plan.first.take(150).replace('\n', ' ')}")
             }
             if (steps.isEmpty()) { log("❌ تعذّر فهم الخطة بعد محاولتين"); return }
+            if (cp.coding && steps.none { it.contains("مراجعة") || it.contains("review", ignoreCase = true) }) {
+                steps = steps + "مراجعة الشيفرة كاملة وإصلاح الأخطاء وإعادة كتابة الملفات المعدّلة كاملة"
+            }
             cp = cp.copy(steps = steps.map { Step(it) })
             log("📋 الخطة ($by): ${steps.size} خطوات")
         } else {
@@ -168,16 +183,22 @@ class Orchestrator(
         while (coroutineContext.isActive && cp.nextIndex != -1) {
             val i = cp.nextIndex
             val step = cp.steps[i]
-            val context = cp.steps.filter { it.status == StepStatus.DONE }
-                .joinToString("\n\n") { "• ${it.title}\n${it.result.take(1200)}" }
+            val doneSteps = cp.steps.filter { it.status == StepStatus.DONE }
+            val context = if (cp.coding) {
+                val files = CodeExtractor.extract(doneSteps.map { it.result })
+                doneSteps.joinToString("\n") { "• ${it.title}" } + "\n\n" + CodeExtractor.contextFor(files)
+            } else {
+                doneSteps.joinToString("\n\n") { "• ${it.title}\n${it.result.take(1200)}" }
+            }
             val prompt = buildString {
                 append("الهدف العام: ${cp.goal}\n\n")
                 if (context.isNotEmpty()) append("ما أُنجز حتى الآن:\n$context\n\n")
                 append("نفّذ الآن الخطوة ${i + 1}/${cp.steps.size}: ${step.title}\nأعطِ نتيجة مركّزة وكاملة لهذه الخطوة فقط.")
             }
             val res = callWithFailover(
-                "أنت وكيل منفّذ ضمن فريق. أكمل عمل من سبقك دون تكرار، وأجب بنتيجة الخطوة مباشرة.",
-                prompt, 2048
+                if (cp.coding) CODING_SYSTEM
+                else "أنت وكيل منفّذ ضمن فريق. أكمل عمل من سبقك دون تكرار، وأجب بنتيجة الخطوة مباشرة.",
+                prompt, if (cp.coding) 4096 else 2048
             ) ?: return
             val steps = cp.steps.toMutableList()
             steps[i] = step.copy(status = StepStatus.DONE, result = res.first, doneBy = res.second)
@@ -188,11 +209,22 @@ class Orchestrator(
         // 3) التجميع النهائي
         if (cp.finished && cp.finalAnswer.isEmpty()) {
             log("🧩 تجميع النتيجة النهائية…")
-            val all = cp.steps.mapIndexed { n, s -> "${n + 1}. ${s.title}\n${s.result.take(1500)}" }.joinToString("\n\n")
-            val fin = callWithFailover(
-                "اجمع نتائج الخطوات في إجابة نهائية واحدة منظمة للمستخدم.",
-                "الهدف: ${cp.goal}\n\nنتائج الخطوات:\n$all", 2048
-            ) ?: return
+            val finRes = if (cp.coding) {
+                val files = CodeExtractor.extract(cp.steps.map { it.result })
+                callWithFailover(
+                    "اكتب خلاصة هندسية موجزة للمشروع: بنية الملفات وطريقة البناء والتشغيل وأي نقاط تحتاج انتباه المستخدم. لا تعد كتابة الشيفرة.",
+                    "الهدف: ${cp.goal}\n\nالملفات المنتجة (${files.size}):\n${files.keys.joinToString("\n")}\n\nالخطوات:\n" +
+                        cp.steps.mapIndexed { n, s -> "${n + 1}. ${s.title}" }.joinToString("\n"),
+                    2048
+                )
+            } else {
+                val all = cp.steps.mapIndexed { n, s -> "${n + 1}. ${s.title}\n${s.result.take(1500)}" }.joinToString("\n\n")
+                callWithFailover(
+                    "اجمع نتائج الخطوات في إجابة نهائية واحدة منظمة للمستخدم.",
+                    "الهدف: ${cp.goal}\n\nنتائج الخطوات:\n$all", 2048
+                )
+            }
+            val fin = finRes ?: return
             cp = cp.copy(finalAnswer = fin.first)
             log("🏁 انتهى (${fin.second})")
         }
