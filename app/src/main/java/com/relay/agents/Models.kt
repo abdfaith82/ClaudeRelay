@@ -14,7 +14,7 @@ enum class Provider(
     val manual: Boolean = false
 ) {
     CLAUDE("Claude", "claude-sonnet-4-5", "console.anthropic.com", false),
-    GEMINI("Gemini (مجاني)", "gemini-2.5-flash", "aistudio.google.com/apikey", true),
+    GEMINI("Gemini (مجاني)", "gemini-flash-latest", "aistudio.google.com/apikey", true),
     GROQ("Groq (مجاني)", "llama-3.3-70b-versatile", "console.groq.com/keys", true,
         "https://api.groq.com/openai/v1/chat/completions"),
     OPENROUTER("OpenRouter (مجاني)", "meta-llama/llama-3.3-70b-instruct:free", "openrouter.ai/keys", true,

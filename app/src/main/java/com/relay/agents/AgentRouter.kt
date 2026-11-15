@@ -97,7 +97,7 @@ class AgentRouter(
         val h = find(id) ?: return -1
         if (fatal || code == 404) {
             h.disabled = true
-            h.note = if (code == 404) "نموذج/مسار غير موجود" else "مفتاح مرفوض"
+            h.note = if (code == 401 || code == 403) "مفتاح مرفوض" else "نموذج غير صالح (استخدم جلب النماذج)"
             return -1
         }
         h.failures++

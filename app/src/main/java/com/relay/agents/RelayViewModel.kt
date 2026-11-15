@@ -59,6 +59,13 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         storage.saveAgents(agents)
     }
 
+    fun updateModel(id: String, model: String) {
+        val m = model.trim().removePrefix("models/")
+        if (m.isEmpty()) return
+        agents = agents.map { if (it.id == id) it.copy(model = m) else it }
+        storage.saveAgents(agents)
+    }
+
     fun toggleAgent(id: String) {
         agents = agents.map { if (it.id == id) it.copy(enabled = !it.enabled) else it }
         storage.saveAgents(agents)

@@ -13,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -146,6 +147,9 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
     var key by remember { mutableStateOf("") }
     var provider by remember { mutableStateOf(Provider.GEMINI) }
     var model by remember { mutableStateOf(Provider.GEMINI.defaultModel) }
+    var found by remember { mutableStateOf<List<String>>(emptyList()) }
+    var msg by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Text("اختر المزوّد وأضف مفتاحه. المزوّدون المجانيون يعطونك مفتاحاً مجانياً من موقعهم. كل وكيل بمفتاح مستقل، وإذا توقف يكمل التالي.",
@@ -154,7 +158,7 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
                 Provider.values().forEach { p ->
                     FilterChip(
                         selected = provider == p,
-                        onClick = { provider = p; model = p.defaultModel },
+                        onClick = { provider = p; model = p.defaultModel; found = emptyList(); msg = "" },
                         label = { Text(p.label) }
                     )
                 }
@@ -182,6 +186,28 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
             }
             OutlinedTextField(model, { model = it }, label = { Text(if (provider.manual) "رابط موقع الدردشة" else "النموذج") },
                 modifier = Modifier.fillMaxWidth(), singleLine = true)
+            if (!provider.manual) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            msg = "جارٍ الجلب…"
+                            ClaudeClient.listModels(provider, key.trim())
+                                .onSuccess { found = it; msg = "${it.size} نموذجاً متاحاً لمفتاحك، اضغط لاختيار واحد" }
+                                .onFailure { found = emptyList(); msg = "تعذّر الجلب: ${it.message?.take(140)}" }
+                        }
+                    },
+                    enabled = key.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("جلب النماذج المتاحة لمفتاحي") }
+                if (msg.isNotEmpty()) Text(msg, style = MaterialTheme.typography.bodySmall)
+                if (found.isNotEmpty()) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        found.take(60).forEach { m ->
+                            FilterChip(selected = model == m, onClick = { model = m }, label = { Text(m) })
+                        }
+                    }
+                }
+            }
             Button(onClick = { vm.addAgent(name, key, model, provider); name = ""; key = "" }, modifier = Modifier.fillMaxWidth()) {
                 Text("إضافة وكيل")
             }
@@ -193,6 +219,8 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
             Divider()
         }
         items(vm.agents, key = { it.id }) { a ->
+            var editing by remember { mutableStateOf(false) }
+            var editModel by remember(a.model) { mutableStateOf(a.model) }
             Card(Modifier.fillMaxWidth()) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -204,8 +232,16 @@ fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
                         )
                     }
                     if (a.provider.manual) TextButton(onClick = { onLogin(a.model) }) { Text("دخول") }
+                    else TextButton(onClick = { editing = !editing }) { Text("نموذج") }
                     Switch(checked = a.enabled, onCheckedChange = { vm.toggleAgent(a.id) })
                     TextButton(onClick = { vm.removeAgent(a.id) }) { Text("حذف") }
+                }
+                if (editing) {
+                    Row(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(editModel, { editModel = it }, label = { Text("النموذج") },
+                            modifier = Modifier.weight(1f), singleLine = true)
+                        TextButton(onClick = { vm.updateModel(a.id, editModel); editing = false }) { Text("حفظ") }
+                    }
                 }
             }
         }

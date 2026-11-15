@@ -45,10 +45,56 @@ object ClaudeClient {
                 } else {
                     val retryAfter = conn.getHeaderField("retry-after")?.trim()?.toDoubleOrNull()
                         ?.let { (it * 1000).toLong() }
-                    ApiResult.Fail(code, errorMessage(raw), fatal = code == 401 || code == 403, retryAfterMs = retryAfter)
+                    val msg = errorMessage(raw)
+                    // 400 بسبب اسم النموذج = إعداد خاطئ لن يصلحه الانتظار → عطّل الوكيل بدل تكرار المحاولة.
+                    val badModel = code == 400 && msg.contains("model", ignoreCase = true)
+                    ApiResult.Fail(code, msg, fatal = code == 401 || code == 403 || badModel, retryAfterMs = retryAfter)
                 }
             } catch (e: Exception) {
                 ApiResult.Fail(0, e.message ?: e.javaClass.simpleName, fatal = false)
+            }
+        }
+
+    /** اسم النموذج بصيغة صالحة: بلا مسافات وبلا بادئة models/ (سبب خطأ 400 في Gemini). */
+    fun modelId(a: AgentConfig): String = a.model.trim().removePrefix("models/")
+
+    /** يجلب النماذج المتاحة فعلاً لهذا المفتاح، فلا نعتمد على أسماء ثابتة قد تُسحب. */
+    suspend fun listModels(provider: Provider, apiKey: String): Result<List<String>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val (url, headers) = when (provider) {
+                    Provider.CLAUDE -> "https://api.anthropic.com/v1/models?limit=100" to
+                        mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01")
+                    Provider.GEMINI -> "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200" to
+                        mapOf("x-goog-api-key" to apiKey)
+                    Provider.WEB -> error("لا ينطبق على وكيل الويب")
+                    else -> provider.endpoint.replace("/chat/completions", "/models") to
+                        mapOf("Authorization" to "Bearer $apiKey")
+                }
+                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 20_000
+                    readTimeout = 30_000
+                    headers.forEach { (k, v) -> setRequestProperty(k, v) }
+                }
+                val code = conn.responseCode
+                val raw = (if (code in 200..299) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader()?.use { it.readText() } ?: ""
+                if (code !in 200..299) error("$code: ${errorMessage(raw)}")
+                val j = JSONObject(raw)
+                val names: List<String> = if (provider == Provider.GEMINI) {
+                    val arr = j.optJSONArray("models") ?: JSONArray()
+                    (0 until arr.length()).map { i -> arr.getJSONObject(i) }
+                        .filter { m ->
+                            val ms = m.optJSONArray("supportedGenerationMethods")
+                            ms == null || (0 until ms.length()).any { k -> ms.getString(k) == "generateContent" }
+                        }
+                        .map { m -> m.getString("name").removePrefix("models/") }
+                } else {
+                    val arr = j.optJSONArray("data") ?: JSONArray()
+                    (0 until arr.length()).map { i -> arr.getJSONObject(i).getString("id") }
+                }
+                val filtered = if (provider == Provider.OPENROUTER) names.filter { n -> n.endsWith(":free") } else names
+                filtered.sorted()
             }
         }
 
@@ -58,11 +104,11 @@ object ClaudeClient {
         Provider.CLAUDE -> Req(
             "https://api.anthropic.com/v1/messages",
             mapOf("x-api-key" to a.apiKey, "anthropic-version" to "2023-06-01"),
-            JSONObject().put("model", a.model).put("max_tokens", maxTokens).put("system", system)
+            JSONObject().put("model", modelId(a)).put("max_tokens", maxTokens).put("system", system)
                 .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", user)))
         )
         Provider.GEMINI -> Req(
-            "https://generativelanguage.googleapis.com/v1beta/models/${a.model}:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/${modelId(a)}:generateContent",
             mapOf("x-goog-api-key" to a.apiKey),
             JSONObject()
                 .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
@@ -79,7 +125,7 @@ object ClaudeClient {
         Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE -> Req(
             a.provider.endpoint,
             mapOf("Authorization" to "Bearer ${a.apiKey}"),
-            JSONObject().put("model", a.model).put("max_tokens", maxTokens).put(
+            JSONObject().put("model", modelId(a)).put("max_tokens", maxTokens).put(
                 "messages",
                 JSONArray()
                     .put(JSONObject().put("role", "system").put("content", system))
