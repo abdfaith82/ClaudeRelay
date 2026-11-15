@@ -85,20 +85,22 @@ data class Project(
     val name: String,
     val createdAt: Long,
     val updatedAt: Long,
-    val checkpoint: Checkpoint
+    val checkpoint: Checkpoint,
+    val pinned: Boolean = false
 ) {
     val completed: Boolean get() = checkpoint.finalAnswer.isNotEmpty()
 
     fun toJson() = JSONObject()
         .put("id", id).put("name", name)
         .put("createdAt", createdAt).put("updatedAt", updatedAt)
-        .put("checkpoint", checkpoint.toJson())
+        .put("checkpoint", checkpoint.toJson()).put("pinned", pinned)
 
     companion object {
         fun fromJson(o: JSONObject) = Project(
             o.getString("id"), o.getString("name"),
             o.optLong("createdAt"), o.optLong("updatedAt"),
-            Checkpoint.fromJson(o.getJSONObject("checkpoint"))
+            Checkpoint.fromJson(o.getJSONObject("checkpoint")),
+            o.optBoolean("pinned", false)
         )
     }
 }

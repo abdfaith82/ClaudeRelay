@@ -177,6 +177,25 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
+    fun renameProject(id: String, name: String) {
+        val n = name.trim().take(60)
+        if (n.isEmpty()) return
+        updateProject(id) { it.copy(name = n) }
+    }
+
+    fun togglePin(id: String) {
+        updateProject(id) { it.copy(pinned = !it.pinned) }
+    }
+
+    /** تعديل بيانات وصفية لمشروع دون تغيير تاريخ آخر تحديث (لا يقفز في الترتيب). */
+    private fun updateProject(id: String, change: (Project) -> Project) {
+        val p = (if (current?.id == id) current else store.load(id)) ?: return
+        val updated = change(p)
+        store.save(updated)
+        if (current?.id == id) current = updated
+        refreshProjects()
+    }
+
     fun deleteProject(id: String) {
         if (running && current?.id == id) return
         store.delete(id)

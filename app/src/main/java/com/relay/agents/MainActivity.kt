@@ -1,6 +1,16 @@
 package com.relay.agents
 
 import android.content.Context
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.ui.text.font.FontFamily
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -151,10 +161,191 @@ fun ManualScreen(req: RelayViewModel.ManualRequest, onResult: (String?) -> Unit)
     }
 }
 
+private fun titleFor(dest: Int, current: Project?): String = when (dest) {
+    0 -> tr("الوكلاء")
+    1 -> current?.name ?: tr("جلسة جديدة")
+    2 -> tr("المشاريع")
+    3 -> tr("الإعدادات")
+    4 -> tr("الكود")
+    else -> tr("الملفات")
+}
+
+/** إجراءات المشروع المشتركة بين شريط الأعلى وقائمة المشاريع: تصدير/مشاركة. */
+class ProjectActions(
+    private val ctx: Context,
+    private val vm: RelayViewModel,
+    private val exportMd: (String, String) -> Unit,
+    private val exportZip: (Map<String, String>, String) -> Unit
+) {
+    fun share(p: Project) {
+        val text = vm.markdownOf(p.id) ?: return
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, p.name)
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        ctx.startActivity(Intent.createChooser(send, tr("مشاركة")))
+    }
+
+    fun exportMarkdown(p: Project) {
+        vm.markdownOf(p.id)?.let { exportMd(it, ProjectExport.safeFileName(p.name, "md")) }
+    }
+
+    fun codeCount(p: Project): Int = if (p.checkpoint.coding) vm.codeFiles(p.id).size else 0
+
+    fun exportCode(p: Project) {
+        val files = vm.codeFiles(p.id)
+        if (files.isNotEmpty()) exportZip(files, ProjectExport.safeFileName(p.name, "zip"))
+    }
+}
+
+@Composable
+fun rememberProjectActions(vm: RelayViewModel): ProjectActions {
+    val ctx = LocalContext.current
+    var pendingText by remember { mutableStateOf<String?>(null) }
+    var pendingZip by remember { mutableStateOf<Map<String, String>?>(null) }
+    val md = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
+        writeToUri(ctx, uri, pendingText); pendingText = null
+    }
+    val zip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        writeZipToUri(ctx, uri, pendingZip); pendingZip = null
+    }
+    return remember(vm, ctx) {
+        ProjectActions(ctx, vm,
+            { text, name -> pendingText = text; md.launch(name) },
+            { files, name -> pendingZip = files; zip.launch(name) })
+    }
+}
+
+/** قائمة خيارات المشروع (تثبيت، مشاركة، إعادة تسمية، تصدير، حذف). */
+@Composable
+fun ProjectMenu(
+    p: Project,
+    vm: RelayViewModel,
+    actions: ProjectActions,
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit
+) {
+    val codeCount = remember(p.updatedAt, expanded) { if (expanded) actions.codeCount(p) else 0 }
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text(if (p.pinned) tr("إلغاء التثبيت") else tr("تثبيت")) },
+            leadingIcon = { Text("📌") },
+            onClick = { vm.togglePin(p.id); onDismiss() }
+        )
+        DropdownMenuItem(text = { Text(tr("مشاركة")) }, leadingIcon = { Icon(Icons.Default.Share, null) },
+            onClick = { actions.share(p); onDismiss() })
+        DropdownMenuItem(text = { Text(tr("إعادة تسمية")) }, leadingIcon = { Icon(Icons.Default.Edit, null) },
+            onClick = { onRename(); onDismiss() })
+        DropdownMenuItem(text = { Text(tr("تصدير .md")) }, leadingIcon = { Text("📄") },
+            onClick = { actions.exportMarkdown(p); onDismiss() })
+        if (codeCount > 0) {
+            DropdownMenuItem(text = { Text(tr("تصدير الكود ZIP")) }, leadingIcon = { Text("🗜️") },
+                onClick = { actions.exportCode(p); onDismiss() })
+        }
+        DropdownMenuItem(
+            text = { Text(tr("حذف"), color = MaterialTheme.colorScheme.error) },
+            leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) },
+            enabled = !(vm.running && p.id == vm.currentProjectId),
+            onClick = { vm.deleteProject(p.id); onDismiss() }
+        )
+    }
+}
+
+@Composable
+fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(tr("إعادة تسمية")) },
+        text = { OutlinedTextField(name, { name = it }, label = { Text(tr("اسم المشروع")) }, singleLine = true) },
+        confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name) }) { Text(tr("حفظ")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(tr("إلغاء")) } }
+    )
+}
+
+/** القائمة الجانبية: بحث، تنقل، المثبّتة، الأخيرة، وزر جلسة جديدة. */
+@Composable
+fun DrawerContent(
+    vm: RelayViewModel,
+    dest: Int,
+    query: String,
+    onQuery: (String) -> Unit,
+    onNavigate: (Int) -> Unit,
+    onOpenProject: (String) -> Unit,
+    onNewSession: () -> Unit
+) {
+    val q = query.trim().lowercase()
+    val all = vm.projects.sortedWith(compareByDescending<Project> { it.pinned }.thenByDescending { it.updatedAt })
+    val filtered = if (q.isEmpty()) all else all.filter { (it.name + " " + it.checkpoint.goal).lowercase().contains(q) }
+    val pinned = filtered.filter { it.pinned }
+    val recent = filtered.filter { !it.pinned }.take(15)
+    val nav = listOf(
+        Triple(1, "التشغيل", "▶️"), Triple(0, "الوكلاء", "🤖"), Triple(2, "المشاريع", "🗂️"),
+        Triple(4, "الكود", "💻"), Triple(5, "الملفات", "📄"), Triple(3, "الإعدادات", "⚙️")
+    )
+    Column(Modifier.fillMaxSize().padding(12.dp)) {
+        Text("Claude Relay", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(8.dp))
+        OutlinedTextField(
+            query, onQuery,
+            placeholder = { Text(tr("بحث")) },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
+            items(nav, key = { it.first }) { (id, label, icon) ->
+                NavigationDrawerItem(
+                    label = { Text(tr(label)) },
+                    icon = { Text(icon) },
+                    selected = dest == id,
+                    onClick = { onNavigate(id) }
+                )
+            }
+            if (pinned.isNotEmpty()) {
+                item { Text(tr("المثبّتة"), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)) }
+                items(pinned, key = { "p" + it.id }) { p ->
+                    NavigationDrawerItem(
+                        label = { Text(p.name, maxLines = 1) },
+                        icon = { Text("📌") },
+                        selected = p.id == vm.currentProjectId && dest == 1,
+                        onClick = { onOpenProject(p.id) }
+                    )
+                }
+            }
+            if (recent.isNotEmpty()) {
+                item { Text(tr("الأخيرة"), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)) }
+                items(recent, key = { "r" + it.id }) { p ->
+                    NavigationDrawerItem(
+                        label = { Text(p.name, maxLines = 1) },
+                        icon = { Text(if (p.checkpoint.coding) "💻" else "💬") },
+                        selected = p.id == vm.currentProjectId && dest == 1,
+                        onClick = { onOpenProject(p.id) }
+                    )
+                }
+            }
+        }
+        ExtendedFloatingActionButton(onClick = onNewSession, modifier = Modifier.padding(top = 8.dp)) {
+            Icon(Icons.Default.Add, null)
+            Spacer(Modifier.width(8.dp))
+            Text(tr("جلسة جديدة"))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RelayScreen(vm: RelayViewModel) {
-    var tab by remember { mutableIntStateOf(0) }
+    var dest by remember { mutableIntStateOf(1) } // 0 وكلاء، 1 تشغيل، 2 مشاريع، 3 إعدادات، 4 كود، 5 ملفات
     var loginUrl by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
+    var renameTarget by remember { mutableStateOf<Project?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    val actions = rememberProjectActions(vm)
+
     val manual = vm.manualRequest
     if (manual != null) {
         ManualScreen(manual) { vm.answerManual(it) }
@@ -165,19 +356,57 @@ fun RelayScreen(vm: RelayViewModel) {
         LoginScreen(lu) { loginUrl = null }
         return
     }
-    Column(Modifier.fillMaxSize().systemBarsPadding()) {
-        ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text(tr("الوكلاء")) })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text(tr("التشغيل")) })
-            Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text(trf("المشاريع (%s)", vm.projects.size)) })
-            Tab(selected = tab == 3, onClick = { tab = 3 }, text = { Text(tr("الإعدادات")) })
+
+    val current = vm.projects.firstOrNull { it.id == vm.currentProjectId }
+    ModalNavigationDrawer(
+        drawerState = drawer,
+        drawerContent = {
+            ModalDrawerSheet {
+                DrawerContent(
+                    vm, dest, query, { query = it },
+                    onNavigate = { dest = it; scope.launch { drawer.close() } },
+                    onOpenProject = { id -> if (vm.openProject(id)) dest = 1; scope.launch { drawer.close() } },
+                    onNewSession = { if (!vm.running) vm.reset(); dest = 1; scope.launch { drawer.close() } }
+                )
+            }
         }
-        when (tab) {
-            0 -> AgentsTab(vm) { loginUrl = it }
-            1 -> RunTab(vm)
-            2 -> ProjectsTab(vm) { tab = 1 }
-            else -> SettingsTab()
+    ) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(titleFor(dest, current), maxLines = 1) },
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawer.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = tr("القائمة"))
+                        }
+                    },
+                    actions = {
+                        if (dest == 1 && current != null) {
+                            Box {
+                                IconButton(onClick = { menuOpen = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = tr("خيارات المشروع"))
+                                }
+                                ProjectMenu(current, vm, actions, menuOpen, { menuOpen = false }) { renameTarget = current }
+                            }
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Box(Modifier.padding(padding).fillMaxSize()) {
+                when (dest) {
+                    0 -> AgentsTab(vm) { loginUrl = it }
+                    1 -> RunTab(vm)
+                    2 -> ProjectsTab(vm, actions, query, false, { dest = 1 }) { renameTarget = it }
+                    4 -> ProjectsTab(vm, actions, query, true, { dest = 1 }) { renameTarget = it }
+                    5 -> FilesTab(vm, query)
+                    else -> SettingsTab()
+                }
+            }
         }
+    }
+    renameTarget?.let { p ->
+        RenameDialog(p.name, onDismiss = { renameTarget = null }) { vm.renameProject(p.id, it); renameTarget = null }
     }
 }
 
@@ -410,20 +639,24 @@ private fun writeZipToUri(ctx: Context, uri: Uri?, files: Map<String, String>?) 
 }
 
 @Composable
-fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
+fun ProjectsTab(
+    vm: RelayViewModel,
+    actions: ProjectActions,
+    query: String,
+    codingOnly: Boolean,
+    onOpen: () -> Unit,
+    onRename: (Project) -> Unit
+) {
     val ctx = LocalContext.current
-    var pendingZip by remember { mutableStateOf<Map<String, String>?>(null) }
-    val zipLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
-        writeZipToUri(ctx, uri, pendingZip); pendingZip = null
-    }
     var pending by remember { mutableStateOf<String?>(null) }
-    val mdLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
-        writeToUri(ctx, uri, pending); pending = null
-    }
     val jsonLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         writeToUri(ctx, uri, pending); pending = null
     }
     val fmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US) }
+    val q = query.trim().lowercase()
+    val list = vm.projects
+        .filter { (!codingOnly || it.checkpoint.coding) && (q.isEmpty() || (it.name + " " + it.checkpoint.goal).lowercase().contains(q)) }
+        .sortedWith(compareByDescending<Project> { it.pinned }.thenByDescending { it.updatedAt })
 
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
@@ -435,47 +668,75 @@ fun ProjectsTab(vm: RelayViewModel, onOpen: () -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             ) { Text(tr("تصدير كل المشاريع (JSON)")) }
         }
-        if (vm.projects.isEmpty()) {
-            item { Text(tr("لا توجد مشاريع بعد. ابدأ مهمة من تبويب التشغيل.")) }
+        if (list.isEmpty()) {
+            item { Text(if (q.isEmpty()) tr("لا توجد مشاريع بعد. ابدأ مهمة من تبويب التشغيل.") else tr("لا توجد نتائج")) }
         }
-        items(vm.projects, key = { it.id }) { p ->
+        items(list, key = { it.id }) { p ->
+            var menu by remember { mutableStateOf(false) }
             val steps = p.checkpoint.steps
             val done = steps.count { it.status == StepStatus.DONE }
-            val codeCount = remember(p.updatedAt) { if (p.checkpoint.coding) vm.codeFiles(p.id).size else 0 }
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(p.name, style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "${if (p.completed) tr("✅ مكتمل") else tr("⏸ غير مكتمل")} • $done/${steps.size} • ${fmt.format(Date(p.updatedAt))}" +
-                            if (p.id == vm.currentProjectId) tr(" • الحالي") else "",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { if (vm.openProject(p.id)) onOpen() }, enabled = !vm.running) { Text(tr("فتح")) }
-                        TextButton(onClick = {
-                            pending = vm.markdownOf(p.id)
-                            mdLauncher.launch(ProjectExport.safeFileName(p.name, "md"))
-                        }) { Text(tr("تصدير .md")) }
-                        TextButton(onClick = {
-                            val text = vm.markdownOf(p.id) ?: return@TextButton
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, p.name)
-                                putExtra(Intent.EXTRA_TEXT, text)
-                            }
-                            ctx.startActivity(Intent.createChooser(send, tr("مشاركة المشروع")))
-                        }) { Text(tr("مشاركة")) }
-                        if (codeCount > 0) {
-                            TextButton(onClick = {
-                                pendingZip = vm.codeFiles(p.id)
-                                zipLauncher.launch(ProjectExport.safeFileName(p.name, "zip"))
-                            }) { Text(trf("كود ZIP (%s)", codeCount)) }
-                        }
-                        TextButton(onClick = { vm.deleteProject(p.id) }, enabled = !(vm.running && p.id == vm.currentProjectId)) { Text(tr("حذف")) }
+            Card(Modifier.fillMaxWidth().clickable { if (vm.openProject(p.id)) onOpen() }) {
+                Row(Modifier.padding(start = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text((if (p.pinned) "📌 " else "") + (if (p.checkpoint.coding) "💻 " else "") + p.name,
+                            style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "${if (p.completed) tr("✅ مكتمل") else tr("⏸ غير مكتمل")} • $done/${steps.size} • ${fmt.format(Date(p.updatedAt))}" +
+                                if (p.id == vm.currentProjectId) tr(" • الحالي") else "",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Box {
+                        IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, contentDescription = tr("خيارات المشروع")) }
+                        ProjectMenu(p, vm, actions, menu, { menu = false }) { onRename(p) }
                     }
                 }
             }
         }
+    }
+}
+
+/** ملفات الكود المولَّدة في مشاريع وضع البرمجة، مع عرض ونسخ. */
+@Composable
+fun FilesTab(vm: RelayViewModel, query: String) {
+    val clipboard = LocalClipboardManager.current
+    val q = query.trim().lowercase()
+    val data = remember(vm.projects) {
+        vm.projects.filter { it.checkpoint.coding }.sortedByDescending { it.updatedAt }
+            .map { it to vm.codeFiles(it.id) }.filter { it.second.isNotEmpty() }
+    }
+    var viewing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (data.isEmpty()) {
+            item { Text(tr("لا توجد ملفات كود بعد. فعّل وضع البرمجة وابدأ مشروعاً.")) }
+        }
+        data.forEach { (p, files) ->
+            val shown = files.entries.filter { q.isEmpty() || it.key.lowercase().contains(q) }
+            if (shown.isNotEmpty()) {
+                item(key = "h" + p.id) { Text(p.name, style = MaterialTheme.typography.titleSmall) }
+                items(shown, key = { p.id + "/" + it.key }) { e ->
+                    Card(Modifier.fillMaxWidth().clickable { viewing = e.key to e.value }) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(e.key, style = MaterialTheme.typography.bodyMedium)
+                            Text("${e.value.length} ${tr("حرفاً")}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    viewing?.let { (path, content) ->
+        AlertDialog(
+            onDismissRequest = { viewing = null },
+            title = { Text(path, style = MaterialTheme.typography.titleSmall) },
+            text = {
+                SelectionContainer(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    Text(content.take(20_000), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { clipboard.setText(AnnotatedString(content)) }) { Text(tr("نسخ")) } },
+            dismissButton = { TextButton(onClick = { viewing = null }) { Text(tr("إغلاق")) } }
+        )
     }
 }
 
