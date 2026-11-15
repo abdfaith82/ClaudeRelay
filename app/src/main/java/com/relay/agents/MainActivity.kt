@@ -60,6 +60,31 @@ fun CrashScreen(text: String, onContinue: () -> Unit) {
     }
 }
 
+/** تسجيل الدخول مرة واحدة: تدخل بنفسك والجلسة (الكوكيز) تبقى محفوظة في التطبيق لاستخدامها في وكيل الويب. */
+@Composable
+fun LoginScreen(url: String, onDone: () -> Unit) {
+    Column(Modifier.fillMaxSize().systemBarsPadding().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("سجّل دخولك في الموقع ثم اضغط «تم». الجلسة تبقى محفوظة في التطبيق. إن رفض الموقع الدخول بحساب Google داخل التطبيق فاستخدم البريد وكلمة المرور أو الرابط السحري.",
+            style = MaterialTheme.typography.bodySmall)
+        AndroidView(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            factory = { ctx ->
+                android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                WebView(ctx).apply {
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    webViewClient = WebViewClient()
+                    loadUrl(url)
+                }
+            }
+        )
+        Button(onClick = {
+            android.webkit.CookieManager.getInstance().flush()
+            onDone()
+        }, modifier = Modifier.fillMaxWidth()) { Text("تم") }
+    }
+}
+
 /** شاشة الوكيل اليدوي: تسجّل الدخول وترسل وتنسخ بنفسك؛ التطبيق لا يحقن نصاً ولا يقرأ الصفحة. */
 @Composable
 fun ManualScreen(req: RelayViewModel.ManualRequest, onResult: (String?) -> Unit) {
@@ -95,9 +120,15 @@ fun ManualScreen(req: RelayViewModel.ManualRequest, onResult: (String?) -> Unit)
 @Composable
 fun RelayScreen(vm: RelayViewModel) {
     var tab by remember { mutableIntStateOf(0) }
+    var loginUrl by remember { mutableStateOf<String?>(null) }
     val manual = vm.manualRequest
     if (manual != null) {
         ManualScreen(manual) { vm.answerManual(it) }
+        return
+    }
+    val lu = loginUrl
+    if (lu != null) {
+        LoginScreen(lu) { loginUrl = null }
         return
     }
     Column(Modifier.fillMaxSize().systemBarsPadding()) {
@@ -105,12 +136,12 @@ fun RelayScreen(vm: RelayViewModel) {
             Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("الوكلاء") })
             Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("التشغيل") })
         }
-        if (tab == 0) AgentsTab(vm) else RunTab(vm)
+        if (tab == 0) AgentsTab(vm) { loginUrl = it } else RunTab(vm)
     }
 }
 
 @Composable
-fun AgentsTab(vm: RelayViewModel) {
+fun AgentsTab(vm: RelayViewModel, onLogin: (String) -> Unit) {
     var name by remember { mutableStateOf("") }
     var key by remember { mutableStateOf("") }
     var provider by remember { mutableStateOf(Provider.GEMINI) }
@@ -133,6 +164,17 @@ fun AgentsTab(vm: RelayViewModel) {
                 else "مفتاح ${provider.label} من: ${provider.keyUrl}",
                 style = MaterialTheme.typography.bodySmall
             )
+            if (provider.manual) {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        "Claude" to "https://claude.ai",
+                        "ChatGPT" to "https://chatgpt.com",
+                        "Gemini" to "https://gemini.google.com"
+                    ).forEach { (n, u) ->
+                        AssistChip(onClick = { model = u; if (name.isBlank()) name = "$n (ويب)" }, label = { Text(n) })
+                    }
+                }
+            }
             OutlinedTextField(name, { name = it }, label = { Text("اسم الوكيل") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
             if (!provider.manual) {
                 OutlinedTextField(key, { key = it }, label = { Text("مفتاح API") }, modifier = Modifier.fillMaxWidth(),
@@ -142,6 +184,11 @@ fun AgentsTab(vm: RelayViewModel) {
                 modifier = Modifier.fillMaxWidth(), singleLine = true)
             Button(onClick = { vm.addAgent(name, key, model, provider); name = ""; key = "" }, modifier = Modifier.fillMaxWidth()) {
                 Text("إضافة وكيل")
+            }
+            if (provider.manual) {
+                OutlinedButton(onClick = { onLogin(model) }, modifier = Modifier.fillMaxWidth(), enabled = model.startsWith("http")) {
+                    Text("تسجيل الدخول الآن")
+                }
             }
             Divider()
         }
@@ -156,6 +203,7 @@ fun AgentsTab(vm: RelayViewModel) {
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                    if (a.provider.manual) TextButton(onClick = { onLogin(a.model) }) { Text("دخول") }
                     Switch(checked = a.enabled, onCheckedChange = { vm.toggleAgent(a.id) })
                     TextButton(onClick = { vm.removeAgent(a.id) }) { Text("حذف") }
                 }
