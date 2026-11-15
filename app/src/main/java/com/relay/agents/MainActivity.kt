@@ -238,7 +238,7 @@ fun RunTab(vm: RelayViewModel) {
                         it.cooldownUntil > System.currentTimeMillis() -> "في راحة"
                         else -> "جاهز"
                     }
-                    Text("• ${it.agent.name}: $s", style = MaterialTheme.typography.bodySmall)
+                    Text("• ${it.agent.name}: $s ${it.note}", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

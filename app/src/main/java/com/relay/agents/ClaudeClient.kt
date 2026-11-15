@@ -11,7 +11,13 @@ sealed class ApiResult {
     data class Ok(val text: String) : ApiResult()
 
     /** fatal: مفتاح خاطئ → عطّل الوكيل. غير ذلك مؤقت (حد معدّل/ازدحام/شبكة) → جرّب وكيلاً آخر. */
-    data class Fail(val code: Int, val message: String, val fatal: Boolean) : ApiResult()
+    data class Fail(
+        val code: Int,
+        val message: String,
+        val fatal: Boolean,
+        /** قيمة Retry-After من الخادم (مللي ثانية) إن وُجدت. */
+        val retryAfterMs: Long? = null
+    ) : ApiResult()
 }
 
 /** عميل موحّد لواجهات API الرسمية: Claude وGemini وGroq وOpenRouter. */
@@ -37,7 +43,9 @@ object ClaudeClient {
                     val text = parse(agent.provider, JSONObject(raw))
                     if (text.isBlank()) ApiResult.Fail(0, "رد فارغ", fatal = false) else ApiResult.Ok(text)
                 } else {
-                    ApiResult.Fail(code, errorMessage(raw), fatal = code == 401 || code == 403)
+                    val retryAfter = conn.getHeaderField("retry-after")?.trim()?.toDoubleOrNull()
+                        ?.let { (it * 1000).toLong() }
+                    ApiResult.Fail(code, errorMessage(raw), fatal = code == 401 || code == 403, retryAfterMs = retryAfter)
                 }
             } catch (e: Exception) {
                 ApiResult.Fail(0, e.message ?: e.javaClass.simpleName, fatal = false)

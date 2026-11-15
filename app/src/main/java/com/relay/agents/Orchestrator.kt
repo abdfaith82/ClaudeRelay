@@ -6,8 +6,7 @@ import org.json.JSONArray
 import kotlin.coroutines.coroutineContext
 
 /**
- * المنسّق: يخطط الهدف إلى خطوات، ثم ينفذ كل خطوة بأول وكيل متاح.
- * إذا فشل وكيل (حد معدّل/ازدحام/شبكة) يُوضع في فترة راحة ويكمل التالي من نفس الخطوة.
+ * المنسّق: يخطط الهدف إلى خطوات، ثم ينفذ كل خطوة عبر AgentRouter (توزيع حمل + تبديل + backoff).
  * بعد كل خطوة تُحفظ نقطة الاستئناف، فإن أُغلق التطبيق يكمل من آخر نقطة.
  */
 class Orchestrator(
@@ -16,78 +15,55 @@ class Orchestrator(
     private val askManual: suspend (AgentConfig, String) -> String?,
     private val onUpdate: (Checkpoint, List<AgentState>) -> Unit
 ) {
-    data class AgentState(val agent: AgentConfig, val cooldownUntil: Long = 0L, val disabled: Boolean = false, val note: String = "")
-
-    private var states: MutableList<AgentState> = mutableListOf()
+    private val router = AgentRouter()
     private var cp = Checkpoint("")
+
+    private fun publish() = onUpdate(cp, router.snapshot())
 
     private fun log(msg: String) {
         cp = cp.copy(log = cp.log + msg)
         storage.saveCheckpoint(cp)
-        onUpdate(cp, states.toList())
-    }
-
-    private fun setState(id: String, f: (AgentState) -> AgentState) {
-        val i = states.indexOfFirst { it.agent.id == id }
-        if (i >= 0) states[i] = f(states[i])
-    }
-
-    /** يرجع أول وكيل جاهز، أو null إن كانوا جميعاً في راحة/معطّلين. */
-    private fun pick(skip: Set<String>): AgentState? {
-        val now = System.currentTimeMillis()
-        val ready = states.filter { !it.disabled && it.cooldownUntil <= now && it.agent.id !in skip }
-        // وكلاء API أولاً؛ الوكيل اليدوي (ويب) احتياطي أخير حتى لا نزعج المستخدم دون حاجة.
-        return ready.firstOrNull { !it.agent.provider.manual } ?: ready.firstOrNull()
-    }
-
-    private fun nextWakeMs(): Long {
-        val now = System.currentTimeMillis()
-        val t = states.filter { !it.disabled }.minOfOrNull { it.cooldownUntil } ?: return -1
-        return (t - now).coerceAtLeast(1_000)
+        publish()
     }
 
     /** ينفذ طلباً واحداً مع التبديل بين الوكلاء. يرجع (النص، اسم الوكيل) أو null عند الإلغاء/عدم وجود وكلاء. */
     private suspend fun callWithFailover(system: String, user: String, maxTokens: Int): Pair<String, String>? {
-        val triedThisRound = mutableSetOf<String>()
         while (coroutineContext.isActive) {
-            val st = pick(triedThisRound)
-            if (st == null) {
-                val wait = nextWakeMs()
-                if (wait < 0) {
-                    log("⛔ كل الوكلاء معطّلون (تحقق من المفاتيح)")
+            when (val p = router.pick()) {
+                AgentRouter.Pick.None -> {
+                    log("⛔ كل الوكلاء معطّلون (تحقق من المفاتيح والنماذج)")
                     return null
                 }
-                log("⏳ كل الوكلاء في راحة، انتظار ${wait / 1000} ثانية")
-                triedThisRound.clear()
-                delay(minOf(wait, 60_000))
-                continue
-            }
-            val a = st.agent
-            if (a.provider.manual) {
-                log("🖐️ ${a.name}: بانتظار تنفيذك اليدوي في الويب")
-                val reply = askManual(a, "$system\n\n---\n\n$user")
-                if (!reply.isNullOrBlank()) return reply.trim() to a.name
-                log("⏭️ تخطي ${a.name} (راحة 10 دقائق)")
-                setState(a.id) { it.copy(cooldownUntil = System.currentTimeMillis() + 600_000, note = "تخطي") }
-                triedThisRound += a.id
-                continue
-            }
-            when (val r = ClaudeClient.send(a, system, user, maxTokens)) {
-                is ApiResult.Ok -> return r.text to a.name
-                is ApiResult.Fail -> {
-                    if (r.fatal) {
-                        log("❌ ${a.name}: مفتاح مرفوض (${r.code}) — تم تعطيله")
-                        setState(a.id) { it.copy(disabled = true, note = "مفتاح مرفوض") }
-                    } else {
-                        val cool = when (r.code) {
-                            429 -> 60_000L
-                            529, 503 -> 30_000L
-                            else -> 15_000L
+                is AgentRouter.Pick.Wait -> {
+                    if (p.ms > 5_000) log("⏳ كل الوكلاء في راحة، انتظار ${p.ms / 1000} ثانية")
+                    publish()
+                    delay(minOf(p.ms, 30_000))
+                }
+                is AgentRouter.Pick.Ready -> {
+                    val a = p.health.agent
+                    router.markStart(a.id)
+                    if (a.provider.manual) {
+                        log("🖐️ ${a.name}: بانتظار تنفيذك اليدوي في الويب")
+                        val reply = askManual(a, "$system\n\n---\n\n$user")
+                        if (!reply.isNullOrBlank()) {
+                            router.onSuccess(a.id)
+                            return reply.trim() to a.name
                         }
-                        log("⚠️ ${a.name} توقف (${r.code}: ${r.message.take(80)}) — يكمل الوكيل التالي")
-                        setState(a.id) { it.copy(cooldownUntil = System.currentTimeMillis() + cool, note = "راحة") }
+                        log("⏭️ تخطي ${a.name} (راحة 10 دقائق)")
+                        router.park(a.id, 600_000, "تخطي")
+                        continue
                     }
-                    triedThisRound += a.id
+                    when (val r = ClaudeClient.send(a, system, user, maxTokens)) {
+                        is ApiResult.Ok -> {
+                            router.onSuccess(a.id)
+                            return r.text to a.name
+                        }
+                        is ApiResult.Fail -> {
+                            val cool = router.onFailure(a.id, r.code, r.retryAfterMs, r.fatal)
+                            if (cool < 0) log("❌ ${a.name}: عُطّل (${r.code}: ${r.message.take(80)})")
+                            else log("⚠️ ${a.name} توقف (${r.code}: ${r.message.take(80)}) — راحة ${cool / 1000}ث ويكمل الوكيل التالي")
+                        }
+                    }
                 }
             }
         }
@@ -103,12 +79,11 @@ class Orchestrator(
         }.getOrDefault(emptyList())
     }
 
-    /** يبدأ هدفاً جديداً أو يكمل نقطة محفوظة (إن كان goal نفسه). */
+    /** يبدأ هدفاً جديداً أو يكمل نقطة محفوظة. */
     suspend fun run(goal: String, agents: List<AgentConfig>, resume: Checkpoint?) {
-        states = agents.filter { it.enabled && (it.apiKey.isNotBlank() || it.provider.manual) }
-            .map { AgentState(it) }.toMutableList()
+        router.load(agents.filter { it.enabled && (it.apiKey.isNotBlank() || it.provider.manual) })
         cp = resume ?: Checkpoint(goal)
-        if (states.isEmpty()) { log("⛔ لا يوجد وكلاء مفعّلون"); return }
+        if (router.size == 0) { log("⛔ لا يوجد وكلاء مفعّلون"); return }
 
         // 1) التخطيط
         if (cp.steps.isEmpty()) {

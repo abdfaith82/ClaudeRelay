@@ -18,7 +18,7 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var checkpoint by mutableStateOf(storage.loadCheckpoint())
         private set
-    var states by mutableStateOf<List<Orchestrator.AgentState>>(emptyList())
+    var states by mutableStateOf<List<AgentState>>(emptyList())
         private set
     var running by mutableStateOf(false)
         private set
