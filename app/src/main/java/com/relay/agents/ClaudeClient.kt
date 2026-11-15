@@ -119,7 +119,8 @@ object ClaudeClient {
                             .put("parts", JSONArray().put(JSONObject().put("text", user)))
                     )
                 )
-                .put("generationConfig", JSONObject().put("maxOutputTokens", maxTokens))
+                // نماذج Gemini "المفكّرة" تستهلك جزءاً من الحد في التفكير، فنرفع السقف كي لا يُقطع الرد.
+                .put("generationConfig", JSONObject().put("maxOutputTokens", maxOf(maxTokens * 3, 4096)))
         )
         Provider.WEB -> error("وكيل الويب يدوي ولا يُستدعى عبر API")
         Provider.GROQ, Provider.OPENROUTER, Provider.MISTRAL, Provider.CEREBRAS, Provider.HUGGINGFACE -> Req(

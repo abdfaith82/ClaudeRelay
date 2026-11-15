@@ -70,13 +70,22 @@ class Orchestrator(
         return null
     }
 
+    /** يقبل مصفوفة JSON (حتى داخل ``` )، وإلا يستخرج قائمة مرقّمة/نقطية من النص. */
     private fun parseSteps(text: String): List<String> {
         val s = text.indexOf('['); val e = text.lastIndexOf(']')
-        if (s < 0 || e <= s) return emptyList()
-        return runCatching {
-            val arr = JSONArray(text.substring(s, e + 1))
-            (0 until arr.length()).map { arr.getString(it).trim() }.filter { it.isNotEmpty() }
-        }.getOrDefault(emptyList())
+        if (s >= 0 && e > s) {
+            val fromJson = runCatching {
+                val arr = JSONArray(text.substring(s, e + 1))
+                (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotEmpty() }
+            }.getOrDefault(emptyList())
+            if (fromJson.isNotEmpty()) return fromJson
+        }
+        val item = Regex("""^\s*(?:\d+\s*[.)\-:]|[-*•])\s+(.+)$""")
+        return text.lines()
+            .mapNotNull { item.find(it)?.groupValues?.get(1) }
+            .map { it.replace("**", "").trim().trim('"', ',') }
+            .filter { it.length > 2 }
+            .take(8)
     }
 
     /** يبدأ هدفاً جديداً أو يكمل نقطة محفوظة. */
@@ -88,14 +97,22 @@ class Orchestrator(
         // 1) التخطيط
         if (cp.steps.isEmpty()) {
             log("🧠 تخطيط الهدف…")
-            val plan = callWithFailover(
-                system = "أنت منسّق مهام. قسّم الهدف إلى 3 إلى 6 خطوات قصيرة ومتسلسلة. أجب بمصفوفة JSON من النصوص فقط دون أي شرح.",
-                user = "الهدف: ${cp.goal}", maxTokens = 600
-            ) ?: return
-            val steps = parseSteps(plan.first)
-            if (steps.isEmpty()) { log("❌ تعذّر فهم الخطة"); return }
+            var steps: List<String> = emptyList()
+            var by = ""
+            for (attempt in 1..2) {
+                val plan = callWithFailover(
+                    system = "أنت منسّق مهام. قسّم الهدف إلى 3 إلى 6 خطوات قصيرة ومتسلسلة. أجب بمصفوفة JSON من النصوص فقط دون أي شرح، مثال: [\"خطوة 1\",\"خطوة 2\",\"خطوة 3\"]",
+                    user = "الهدف: ${cp.goal}" + if (attempt == 2) "\n\nأعد الإجابة الآن كمصفوفة JSON فقط." else "",
+                    maxTokens = 2048
+                ) ?: return
+                steps = parseSteps(plan.first)
+                by = plan.second
+                if (steps.isNotEmpty()) break
+                log("⚠️ رد غير مفهوم من ${plan.second} (محاولة $attempt): ${plan.first.take(150).replace('\n', ' ')}")
+            }
+            if (steps.isEmpty()) { log("❌ تعذّر فهم الخطة بعد محاولتين"); return }
             cp = cp.copy(steps = steps.map { Step(it) })
-            log("📋 الخطة (${plan.second}): ${steps.size} خطوات")
+            log("📋 الخطة ($by): ${steps.size} خطوات")
         } else {
             log("▶️ استئناف من الخطوة ${cp.nextIndex + 1}")
         }
