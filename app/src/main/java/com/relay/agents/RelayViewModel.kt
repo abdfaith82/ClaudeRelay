@@ -74,9 +74,9 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
     var chatMemory by mutableStateOf(storage.setting("chat_mem", "1") == "1")
         private set
 
-    fun setChatMode(m: ChatMode) { chatMode = m; storage.saveSetting("chat_mode", m.name) }
-    fun setChatInstructions(t: String) { chatInstructions = t.take(2000); storage.saveSetting("chat_instr", chatInstructions) }
-    fun setChatMemory(on: Boolean) { chatMemory = on; storage.saveSetting("chat_mem", if (on) "1" else "0") }
+    fun selectChatMode(m: ChatMode) { chatMode = m; storage.saveSetting("chat_mode", m.name) }
+    fun editChatInstructions(t: String) { chatInstructions = t.take(2000); storage.saveSetting("chat_instr", chatInstructions) }
+    fun switchChatMemory(on: Boolean) { chatMemory = on; storage.saveSetting("chat_mem", if (on) "1" else "0") }
     fun toggleChatAgent(id: String) {
         chatInclude = if (id in chatInclude) chatInclude - id else chatInclude + id
         storage.saveSetting("chat_include", chatInclude.joinToString(","))

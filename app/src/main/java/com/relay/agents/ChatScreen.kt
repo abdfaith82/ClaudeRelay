@@ -105,7 +105,7 @@ private fun CoordinationPanel(vm: RelayViewModel) {
             Text(tr("أسلوب التنسيق بين النماذج"), style = MaterialTheme.typography.titleSmall)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ChatMode.values().forEach { m ->
-                    FilterChip(selected = vm.chatMode == m, onClick = { vm.setChatMode(m) }, label = { Text(modeLabel(m)) })
+                    FilterChip(selected = vm.chatMode == m, onClick = { vm.selectChatMode(m) }, label = { Text(modeLabel(m)) })
                 }
             }
             Text(
@@ -130,13 +130,13 @@ private fun CoordinationPanel(vm: RelayViewModel) {
             }
 
             OutlinedTextField(
-                vm.chatInstructions, { vm.setChatInstructions(it) },
+                vm.chatInstructions, { vm.editChatInstructions(it) },
                 label = { Text(tr("تعليماتك للتنسيق (اختياري)")) },
                 placeholder = { Text(tr("مثال: اجعل الإجابات مختصرة، وراجع الأرقام قبل الرد")) },
                 modifier = Modifier.fillMaxWidth(), maxLines = 4
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Switch(vm.chatMemory, { vm.setChatMemory(it) })
+                Switch(vm.chatMemory, { vm.switchChatMemory(it) })
                 Spacer(Modifier.width(8.dp))
                 Text(tr("استخدام ذاكرة المشاريع المحفوظة"), style = MaterialTheme.typography.bodySmall)
             }
