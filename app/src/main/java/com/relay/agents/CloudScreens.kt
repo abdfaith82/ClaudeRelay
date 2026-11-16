@@ -37,6 +37,9 @@ class GhConfig(private val st: Storage) {
     var repo by mutableStateOf(st.setting("gh_repo", "ClaudeRelay"))
     var branch by mutableStateOf(st.setting("gh_branch", "main"))
     var workflow by mutableStateOf(st.setting("gh_workflow", "build.yml"))
+    var scanSecrets by mutableStateOf(st.setting("gh_scan", "1") == "1")
+    var ensureIgnore by mutableStateOf(st.setting("gh_ignore", "1") == "1")
+    var verifyBuild by mutableStateOf(st.setting("gh_verify", "1") == "1")
 
     val ready: Boolean get() = token.isNotBlank() && owner.isNotBlank() && repo.isNotBlank() && branch.isNotBlank()
 
@@ -46,6 +49,9 @@ class GhConfig(private val st: Storage) {
         st.saveSetting("gh_repo", repo.trim())
         st.saveSetting("gh_branch", branch.trim())
         st.saveSetting("gh_workflow", workflow.trim())
+        st.saveSetting("gh_scan", if (scanSecrets) "1" else "0")
+        st.saveSetting("gh_ignore", if (ensureIgnore) "1" else "0")
+        st.saveSetting("gh_verify", if (verifyBuild) "1" else "0")
     }
 }
 
@@ -98,7 +104,24 @@ private fun GhConnectionFields(cfg: GhConfig, withWorkflow: Boolean) {
 
 /** شاشة الرفع إلى GitHub: اختيار ملفات/مجلدات من الهاتف أو من الجلسات، ثم مقارنة ورفع (بدون force). */
 @Composable
+private fun CloudOff() {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(tr("الميزات السحابية متوقفة. فعّلها من شاشة القدرات."))
+    }
+}
+
+@Composable
 fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
+    if (vm.cloudEnabled) GitHubTabBody(vm, cfg) else CloudOff()
+}
+
+@Composable
+fun EmulatorTab(vm: RelayViewModel, cfg: GhConfig) {
+    if (vm.cloudEnabled) EmulatorTabBody(vm, cfg) else CloudOff()
+}
+
+@Composable
+private fun GitHubTabBody(vm: RelayViewModel, cfg: GhConfig) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val candidates = remember(vm.projects) { vm.projects.filter { it.checkpoint.coding }.sortedByDescending { it.updatedAt } }
@@ -140,6 +163,17 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
     }
 
     val files = remember(staged, prefix, includeHidden, skipJunk) { LocalFiles.effective(staged, prefix, includeHidden, skipJunk) }
+    val visible = remember(staged, includeHidden, skipJunk) { LocalFiles.effective(staged, "", includeHidden, skipJunk) }
+    val flagged = remember(visible, cfg.scanSecrets) { if (cfg.scanSecrets) SecretScan.find(visible) else emptyMap() }
+    var verifying by remember { mutableStateOf(false) }
+    val extras = remember(visible, prefix, cfg.ensureIgnore) {
+        val androidProject = visible.keys.any { it.endsWith("build.gradle") || it.endsWith("build.gradle.kts") || it.endsWith("settings.gradle") }
+        if (cfg.ensureIgnore && androidProject) {
+            val pre = LocalFiles.cleanPath(prefix) ?: ""
+            mapOf((if (pre.isEmpty()) "" else "$pre/") + ".gitignore" to
+                "build/\n*.apk\n.gradle/\nlocal.properties\n.idea/\n*.iml\n.DS_Store\n".toByteArray())
+        } else emptyMap()
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionCard(tr("الاتصال بـ GitHub")) {
@@ -209,7 +243,33 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
             Text(tr("دائماً: commit واحد ذري، بدون force push، وبدون حذف ملفات موجودة في المستودع."),
                 style = MaterialTheme.typography.bodySmall)
 
-            val canRun = cfg.ready && files.isNotEmpty() && !busy
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(cfg.scanSecrets, { cfg.scanSecrets = it; cfg.save() })
+                Spacer(Modifier.width(8.dp))
+                Text(tr("فحص الأسرار قبل الرفع (رموز، مفاتيح API)"), style = MaterialTheme.typography.bodySmall)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(cfg.ensureIgnore, { cfg.ensureIgnore = it; cfg.save() })
+                Spacer(Modifier.width(8.dp))
+                Text(tr("إضافة .gitignore قياسي لمشاريع أندرويد إن لم يوجد"), style = MaterialTheme.typography.bodySmall)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(cfg.verifyBuild, { cfg.verifyBuild = it; cfg.save() })
+                Spacer(Modifier.width(8.dp))
+                Text(tr("التحقق من نجاح البناء بعد الرفع (Actions)"), style = MaterialTheme.typography.bodySmall)
+            }
+            if (flagged.isNotEmpty()) {
+                Text(tr("⚠️ أسرار مكتشفة، لن يُرفع شيء حتى تُستبعد:"), color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium)
+                flagged.entries.take(10).forEach { (p, k) ->
+                    Text("• $p — $k", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                }
+                OutlinedButton(onClick = { staged = staged.filterKeys { it !in flagged.keys }; diff = null }) {
+                    Text(tr("استبعاد الملفات المكشوفة"))
+                }
+            }
+
+            val canRun = cfg.ready && files.isNotEmpty() && !busy && flagged.isEmpty()
             OutlinedButton(
                 enabled = canRun,
                 modifier = Modifier.fillMaxWidth(),
@@ -219,7 +279,7 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
                         busy = true
                         val r = withContext(Dispatchers.IO) { GitHubClient.remote(cfg.token.trim(), cfg.owner.trim(), cfg.repo.trim(), cfg.branch.trim()) }
                         r.onSuccess {
-                            val d = GitHubClient.diff(snapshot, it.files)
+                            val d = GitHubClient.diff(snapshot + extras.filterKeys { k -> k !in it.files && k !in snapshot }, it.files)
                             diff = d
                             log.add(trf("مقارنة: جديد %s، معدّل %s، متطابق %s", d.added.size, d.modified.size, d.same.size))
                         }.onFailure { log.add("❌ " + (it.message ?: it.toString())) }
@@ -243,7 +303,7 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
                     scope.launch {
                         busy = true
                         val r = withContext(Dispatchers.IO) {
-                            GitHubClient.push(cfg.token.trim(), cfg.owner.trim(), cfg.repo.trim(), cfg.branch.trim(), snapshot, message.ifBlank { "Update" })
+                            GitHubClient.push(cfg.token.trim(), cfg.owner.trim(), cfg.repo.trim(), cfg.branch.trim(), snapshot, message.ifBlank { "Update" }, extras)
                         }
                         r.onSuccess {
                             if (it.count == 0) log.add(tr("لا تغييرات للرفع."))
@@ -254,11 +314,37 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
                             diff = null
                         }.onFailure { log.add("❌ " + (it.message ?: it.toString())) }
                         busy = false
+                        val pushed = r.getOrNull()
+                        if (cfg.verifyBuild && pushed != null && pushed.count > 0) {
+                            verifying = true
+                            log.add(tr("⏳ التحقق من البناء…"))
+                            var seen = false
+                            repeat(24) {
+                                delay(10_000)
+                                val run = withContext(Dispatchers.IO) {
+                                    GitHubClient.latestRun(cfg.token.trim(), cfg.owner.trim(), cfg.repo.trim(), cfg.branch.trim(), pushed.sha)
+                                }.getOrNull()
+                                if (run != null && !seen) { seen = true; log.add(trf("🔧 بدأ البناء: %s", run.title)) }
+                                if (run != null && run.done) {
+                                    log.add(if (run.conclusion == "success") tr("✅ نجح البناء بعد الرفع") else "❌ " + trf("فشل البناء (%s)", run.conclusion))
+                                    if (run.url.isNotEmpty()) commitUrl = run.url
+                                    verifying = false
+                                    return@launch
+                                }
+                                if (!seen && it >= 5) {
+                                    log.add(tr("ℹ️ لا يوجد سير عمل يعمل على هذا الـ commit."))
+                                    verifying = false
+                                    return@launch
+                                }
+                            }
+                            log.add(tr("ℹ️ انتهت مهلة المتابعة. راجع صفحة Actions."))
+                            verifying = false
+                        }
                     }
                 }
             ) { Text(tr("الخطوة 2: رفع إلى GitHub")) }
 
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if (busy || verifying) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
 
         if (log.isNotEmpty() || commitUrl.isNotEmpty()) {
@@ -292,7 +378,7 @@ private val LIBRARIES = listOf(
 
 /** شاشة المحاكي: معاينة واجهات الويب داخل إطار جهاز + بناء سحابي لملف APK عبر GitHub Actions. */
 @Composable
-fun EmulatorTab(vm: RelayViewModel, cfg: GhConfig) {
+private fun EmulatorTabBody(vm: RelayViewModel, cfg: GhConfig) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val devices = remember {

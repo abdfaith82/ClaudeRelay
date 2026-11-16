@@ -82,6 +82,43 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         storage.saveSetting("chat_include", chatInclude.joinToString(","))
     }
 
+    // ---------- الملف الشخصي والقدرات ----------
+    var profileName by mutableStateOf(storage.setting("profile_name", ""))
+        private set
+    var profilePrefs by mutableStateOf(storage.setting("profile_prefs", ""))
+        private set
+    var defaultCoding by mutableStateOf(storage.setting("cap_coding", "0") == "1")
+        private set
+    var defaultThinking by mutableStateOf(storage.setting("cap_thinking", "0") == "1")
+        private set
+    var chatFailover by mutableStateOf(storage.setting("cap_failover", "1") == "1")
+        private set
+    var cloudEnabled by mutableStateOf(storage.setting("cap_cloud", "1") == "1")
+        private set
+
+    fun saveProfile(name: String, prefs: String) {
+        profileName = name.trim().take(60)
+        profilePrefs = prefs.trim().take(4000)
+        storage.saveSetting("profile_name", profileName)
+        storage.saveSetting("profile_prefs", profilePrefs)
+    }
+
+    fun updateCapability(key: String, on: Boolean) {
+        when (key) {
+            "coding" -> defaultCoding = on
+            "thinking" -> defaultThinking = on
+            "failover" -> chatFailover = on
+            "cloud" -> cloudEnabled = on
+            "memory" -> { chatMemory = on; storage.saveSetting("chat_mem", if (on) "1" else "0"); return }
+        }
+        storage.saveSetting("cap_$key", if (on) "1" else "0")
+    }
+
+    private fun profileText(): String = buildString {
+        if (profileName.isNotBlank()) append("The user's name: ").append(profileName).append('\n')
+        if (profilePrefs.isNotBlank()) append(profilePrefs)
+    }.trim()
+
     fun stopChat() { chatJob?.cancel() }
 
     fun clearChat() {
@@ -113,10 +150,11 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         chatBusy = true
         chatStatus = ""
         val history = chat
+        chatEngine.failover = chatFailover
         val memory = if (chatMemory) MemoryBuilder.build(store.list(), t) else ""
         chatJob = viewModelScope.launch {
             try {
-                val msg = chatEngine.reply(history, chatMode, agents, chatInstructions, memory, chatInclude) { chatStatus = it }
+                val msg = chatEngine.reply(history, chatMode, agents, chatInstructions, memory, chatInclude, profileText()) { chatStatus = it }
                 chat = chat + msg
                 chatStore.save(chat)
             } finally {
@@ -314,13 +352,14 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
     private fun launchRun(goal: String, resume: Checkpoint?, bundle: AttachmentBundle) {
         running = true
         // ذاكرة الوكلاء: ملخص المشاريع الأخرى المحفوظة.
-        val memory = MemoryBuilder.build(store.list().filter { it.id != current?.id }, goal)
+        val memory = if (chatMemory) MemoryBuilder.build(store.list().filter { it.id != current?.id }, goal) else ""
         job = viewModelScope.launch {
             val orch = Orchestrator(storage, ::askManual) { cp, st ->
                 checkpoint = cp
                 states = st
                 persist(cp)
             }
+            orch.profile = profileText()
             try {
                 orch.run(goal, agents, resume, memory, bundle, (resume ?: checkpoint)?.coding ?: false, (resume ?: checkpoint)?.thinking ?: false) { digest ->
                     projectAttachments = projectAttachments.copy(imageDigest = digest)

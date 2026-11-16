@@ -13,10 +13,36 @@ data class GitDiff(val added: List<String>, val modified: List<String>, val same
 
 class Remote(val commit: String?, val tree: String?, val files: Map<String, String>)
 
-class PushResult(val commitUrl: String, val count: Int, val diff: GitDiff)
+class PushResult(val commitUrl: String, val count: Int, val diff: GitDiff, val sha: String = "")
 
-data class RunInfo(val status: String, val conclusion: String, val url: String, val title: String) {
+data class RunInfo(val status: String, val conclusion: String, val url: String, val title: String, val headSha: String = "") {
     val done: Boolean get() = status == "completed"
+}
+
+/** فحص الأسرار قبل الرفع (رموز GitHub، مفاتيح API، مفاتيح خاصة). يتخطى الملفات الثنائية والكبيرة. */
+object SecretScan {
+    private val rules = listOf(
+        "GitHub token" to Regex("""gh[pousr]_[A-Za-z0-9]{30,}"""),
+        "GitHub fine-grained token" to Regex("""github_pat_[A-Za-z0-9_]{20,}"""),
+        "Anthropic API key" to Regex("""sk-ant-[A-Za-z0-9_\-]{20,}"""),
+        "OpenAI-style API key" to Regex("""sk-[A-Za-z0-9]{32,}"""),
+        "Google API key" to Regex("""AIza[0-9A-Za-z_\-]{35}"""),
+        "Groq API key" to Regex("""gsk_[A-Za-z0-9]{30,}"""),
+        "AWS access key" to Regex("""AKIA[0-9A-Z]{16}"""),
+        "Private key" to Regex("""-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----""")
+    )
+
+    /** يرجع مسار الملف ← نوع السر الأول المكتشف. */
+    fun find(files: Map<String, ByteArray>): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for ((path, bytes) in files) {
+            if (bytes.size > 1_000_000) continue
+            if (bytes.take(8000).any { it.toInt() == 0 }) continue
+            val text = String(bytes, Charsets.UTF_8)
+            rules.firstOrNull { it.second.containsMatchIn(text) }?.let { out[path] = it.first }
+        }
+        return out
+    }
 }
 
 /**
@@ -109,7 +135,8 @@ object GitHubClient {
     /** يرفع الملفات المتغيّرة فقط في commit واحد؛ يحدّث الفرع دون force. */
     fun push(
         token: String, owner: String, repo: String, branch: String,
-        files: Map<String, ByteArray>, message: String
+        files: Map<String, ByteArray>, message: String,
+        addIfMissing: Map<String, ByteArray> = emptyMap()
     ): Result<PushResult> = runCatching {
         var rem = remote(token, owner, repo, branch).getOrThrow()
         if (rem.commit == null) {
@@ -121,13 +148,15 @@ object GitHubClient {
             ok(call("PUT", "/repos/$owner/$repo/contents/README.md", token, init))
             rem = remote(token, owner, repo, branch).getOrThrow()
         }
-        val d = diff(files, rem.files)
+        // ملفات النظافة (مثل .gitignore) تُضاف فقط إن لم تكن موجودة في المستودع ولا في اختيارك.
+        val all = files + addIfMissing.filterKeys { it !in rem.files && it !in files }
+        val d = diff(all, rem.files)
         if (d.changed.isEmpty()) return@runCatching PushResult("", 0, d)
 
         val entries = org.json.JSONArray()
         for (path in d.changed) {
             val blob = JSONObject()
-                .put("content", Base64.getEncoder().encodeToString(files.getValue(path)))
+                .put("content", Base64.getEncoder().encodeToString(all.getValue(path)))
                 .put("encoding", "base64")
             val sha = JSONObject(ok(call("POST", "/repos/$owner/$repo/git/blobs", token, blob)).body).getString("sha")
             entries.put(JSONObject().put("path", path).put("mode", "100644").put("type", "blob").put("sha", sha))
@@ -139,7 +168,7 @@ object GitHubClient {
         val newCommit = JSONObject(ok(call("POST", "/repos/$owner/$repo/git/commits", token, commitBody)).body).getString("sha")
         val refBody = JSONObject().put("sha", newCommit).put("force", false)
         ok(call("PATCH", "/repos/$owner/$repo/git/refs/heads/$branch", token, refBody))
-        PushResult("https://github.com/$owner/$repo/commit/$newCommit", d.changed.size, d)
+        PushResult("https://github.com/$owner/$repo/commit/$newCommit", d.changed.size, d, newCommit)
     }
 
     /** يشغّل سير عمل GitHub Actions (يحتاج workflow_dispatch في الملف وصلاحية workflow للرمز). */
@@ -148,12 +177,13 @@ object GitHubClient {
         Unit
     }
 
-    fun latestRun(token: String, owner: String, repo: String, branch: String): Result<RunInfo?> = runCatching {
-        val r = ok(call("GET", "/repos/$owner/$repo/actions/runs?per_page=1&branch=$branch", token))
+    fun latestRun(token: String, owner: String, repo: String, branch: String, sha: String = ""): Result<RunInfo?> = runCatching {
+        val q = if (sha.isNotEmpty()) "&head_sha=$sha" else ""
+        val r = ok(call("GET", "/repos/$owner/$repo/actions/runs?per_page=1&branch=$branch$q", token))
         val arr = JSONObject(r.body).getJSONArray("workflow_runs")
         if (arr.length() == 0) return@runCatching null
         val o = arr.getJSONObject(0)
         fun s(k: String) = if (o.isNull(k)) "" else o.getString(k)
-        RunInfo(s("status"), s("conclusion"), s("html_url"), s("display_title"))
+        RunInfo(s("status"), s("conclusion"), s("html_url"), s("display_title"), s("head_sha"))
     }
 }

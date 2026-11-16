@@ -84,6 +84,9 @@ class ChatEngine {
     private var sig = ""
     private var lastError = ""
 
+    /** false = لا تبديل بين الوكلاء: تتوقف المحادثة عند فشل الوكيل الأول. */
+    var failover = true
+
     private class Ans(val text: String, val id: String, val name: String)
 
     private fun sync(agents: List<AgentConfig>) {
@@ -98,6 +101,7 @@ class ChatEngine {
         var waited = 0L
         var tries = 0
         while (tries < 8) {
+            if (!failover && tries >= 1) return null
             when (val p = router.pick(eligible)) {
                 AgentRouter.Pick.None -> {
                     if (lastError.isEmpty()) lastError = "No usable agent"
@@ -146,6 +150,7 @@ class ChatEngine {
         instructions: String,
         memory: String,
         include: Set<String>,
+        profile: String,
         status: (String) -> Unit
     ): ChatMsg {
         sync(agents)
@@ -164,6 +169,7 @@ class ChatEngine {
                     ChatMode.PIPELINE -> "one agent drafts, a different agent critiques, then the answer is refined"
                 }
             )
+            if (profile.isNotBlank()) append("\n\n--- User profile and preferences (always follow) ---\n").append(profile)
             if (instructions.isNotBlank()) append("\n\n--- User's coordination instructions ---\n").append(instructions.trim())
             if (memory.isNotBlank()) append("\n\n--- Memory of the user's saved projects (use when relevant) ---\n").append(memory)
         }

@@ -168,6 +168,9 @@ private fun titleFor(dest: Int, current: Project?): String = when (dest) {
     3 -> tr("الإعدادات")
     4 -> tr("الكود")
     8 -> tr("المحادثة")
+    9 -> tr("الملف الشخصي")
+    10 -> tr("القدرات")
+    11 -> tr("الوثائق")
     6 -> tr("الرفع إلى GitHub")
     7 -> tr("المحاكي والسحابة")
     else -> tr("الملفات")
@@ -288,7 +291,8 @@ fun DrawerContent(
         Triple(8, "المحادثة", "💬"), Triple(1, "التشغيل", "▶️"), Triple(0, "الوكلاء", "🤖"), Triple(2, "المشاريع", "🗂️"),
         Triple(4, "الكود", "💻"), Triple(5, "الملفات", "📄")
     )
-    val cloudNav = listOf(Triple(6, "الرفع إلى GitHub", "☁️"), Triple(7, "المحاكي والسحابة", "📱"), Triple(3, "الإعدادات", "⚙️"))
+    val cloudNav = listOf(Triple(6, "الرفع إلى GitHub", "☁️"), Triple(7, "المحاكي والسحابة", "📱"))
+    val accountNav = listOf(Triple(9, "الملف الشخصي", "👤"), Triple(10, "القدرات", "🧩"), Triple(11, "الوثائق", "📚"), Triple(3, "الإعدادات", "⚙️"))
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Text("Claude Relay", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(8.dp))
         OutlinedTextField(
@@ -312,6 +316,18 @@ fun DrawerContent(
                 Text(tr("الموصلات والسحابة"), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 16.dp, bottom = 4.dp))
             }
             items(cloudNav, key = { it.first }) { (id, label, icon) ->
+                NavigationDrawerItem(
+                    label = { Text(tr(label)) },
+                    icon = { Text(icon) },
+                    selected = dest == id,
+                    onClick = { onNavigate(id) }
+                )
+            }
+            item {
+                Divider(Modifier.padding(vertical = 8.dp))
+                Text(tr("الحساب"), style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(start = 16.dp, bottom = 4.dp))
+            }
+            items(accountNav, key = { it.first }) { (id, label, icon) ->
                 NavigationDrawerItem(
                     label = { Text(tr(label)) },
                     icon = { Text(icon) },
@@ -419,6 +435,9 @@ fun RelayScreen(vm: RelayViewModel) {
                     4 -> ProjectsTab(vm, actions, query, true, { dest = 1 }) { renameTarget = it }
                     5 -> FilesTab(vm, query)
                     8 -> ChatTab(vm) { dest = 1 }
+                    9 -> ProfileTab(vm)
+                    10 -> CapabilitiesTab(vm)
+                    11 -> DocsTab()
                     6 -> GitHubTab(vm, gh)
                     7 -> EmulatorTab(vm, gh)
                     else -> SettingsTab()
@@ -764,8 +783,8 @@ fun FilesTab(vm: RelayViewModel, query: String) {
 @Composable
 fun RunTab(vm: RelayViewModel) {
     var goal by remember { mutableStateOf("") }
-    var coding by remember { mutableStateOf(false) }
-    var thinking by remember { mutableStateOf(false) }
+    var coding by remember { mutableStateOf(vm.defaultCoding) }
+    var thinking by remember { mutableStateOf(vm.defaultThinking) }
     val cp = vm.checkpoint
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         vm.addFiles(uris)

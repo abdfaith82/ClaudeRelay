@@ -39,4 +39,16 @@ class GitHubDiffTest {
         assertEquals(null, LocalFiles.cleanPath("../x"))
         assertEquals(null, LocalFiles.cleanPath(""))
     }
+
+    @Test fun secretScanFindsTokensButNotPlainText() {
+        // رموز تجريبية تُبنى وقت التشغيل كي لا تُطابق فاحص الأسرار في المستودع.
+        val tok = "gh" + "p_" + "a".repeat(36)
+        val files = mapOf(
+            "x.kt" to ("val t = \"" + tok + "\"").toByteArray(),
+            "ok.kt" to "val a = 1".toByteArray(),
+            "bin.dat" to byteArrayOf(0, 1, 2)
+        )
+        val found = SecretScan.find(files)
+        assertEquals(setOf("x.kt"), found.keys)
+    }
 }

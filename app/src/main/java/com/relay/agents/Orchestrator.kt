@@ -61,6 +61,9 @@ class Orchestrator(
     private var memory = ""
     private var attachCtx = ""
 
+    /** الملف الشخصي وتفضيلات المستخدم (تُطبَّق على كل المهام). */
+    var profile = ""
+
     private fun publish() = onUpdate(cp, router.snapshot())
 
     private fun log(msg: String) {
@@ -82,6 +85,8 @@ class Orchestrator(
             append(baseSystem)
             if (withContext && memory.isNotBlank())
                 append("\n\n--- Memory of the user's previous projects (use when relevant, do not repeat it) ---\n$memory")
+            if (profile.isNotBlank())
+                append("\n\n--- User profile and preferences (always follow) ---\n$profile")
             if (withContext && attachCtx.isNotBlank())
                 append("\n\n--- Task attachments ---\n$attachCtx")
         }
