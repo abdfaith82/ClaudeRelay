@@ -82,6 +82,9 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         storage.saveSetting("chat_include", chatInclude.joinToString(","))
     }
 
+    /** موصلات الإشعارات (Webhook/تيليجرام/ntfy). */
+    val connectors = ConnectorConfig(storage)
+
     // ---------- الملف الشخصي والقدرات ----------
     var profileName by mutableStateOf(storage.setting("profile_name", ""))
         private set
@@ -368,6 +371,11 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
             } finally {
                 running = false
                 refreshProjects()
+            }
+            // تُرسل الإشعارات فقط عند اكتمال المهمة طبيعياً (ليس عند الإيقاف أو الإلغاء).
+            val done = checkpoint
+            if (cloudEnabled && done != null && done.finalAnswer.isNotEmpty()) {
+                Notifier.broadcast(connectors, "✅ " + (current?.name ?: "Task") + "\n\n" + done.finalAnswer.take(1200))
             }
         }
     }

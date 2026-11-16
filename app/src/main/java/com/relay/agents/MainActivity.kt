@@ -171,6 +171,7 @@ private fun titleFor(dest: Int, current: Project?): String = when (dest) {
     9 -> tr("الملف الشخصي")
     10 -> tr("القدرات")
     11 -> tr("الوثائق")
+    12 -> tr("الموصلات")
     6 -> tr("الرفع إلى GitHub")
     7 -> tr("المحاكي والسحابة")
     else -> tr("الملفات")
@@ -291,7 +292,7 @@ fun DrawerContent(
         Triple(8, "المحادثة", "💬"), Triple(1, "التشغيل", "▶️"), Triple(0, "الوكلاء", "🤖"), Triple(2, "المشاريع", "🗂️"),
         Triple(4, "الكود", "💻"), Triple(5, "الملفات", "📄")
     )
-    val cloudNav = listOf(Triple(6, "الرفع إلى GitHub", "☁️"), Triple(7, "المحاكي والسحابة", "📱"))
+    val cloudNav = listOf(Triple(12, "الموصلات", "🔌"), Triple(6, "الرفع إلى GitHub", "☁️"), Triple(7, "المحاكي والسحابة", "📱"))
     val accountNav = listOf(Triple(9, "الملف الشخصي", "👤"), Triple(10, "القدرات", "🧩"), Triple(11, "الوثائق", "📚"), Triple(3, "الإعدادات", "⚙️"))
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         Text("Claude Relay", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(8.dp))
@@ -438,6 +439,7 @@ fun RelayScreen(vm: RelayViewModel) {
                     9 -> ProfileTab(vm)
                     10 -> CapabilitiesTab(vm)
                     11 -> DocsTab()
+                    12 -> ConnectorsTab(vm, gh) { dest = it }
                     6 -> GitHubTab(vm, gh)
                     7 -> EmulatorTab(vm, gh)
                     else -> SettingsTab()
