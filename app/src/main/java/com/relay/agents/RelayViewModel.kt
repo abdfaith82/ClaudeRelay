@@ -54,6 +54,79 @@ class RelayViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------- المحادثة ----------
+    private val chatStore = ChatStore(app)
+    private val chatEngine = ChatEngine()
+    private var chatJob: Job? = null
+
+    var chat by mutableStateOf(chatStore.load())
+        private set
+    var chatBusy by mutableStateOf(false)
+        private set
+    var chatStatus by mutableStateOf("")
+        private set
+    var chatMode by mutableStateOf(runCatching { ChatMode.valueOf(storage.setting("chat_mode", "AUTO")) }.getOrDefault(ChatMode.AUTO))
+        private set
+    var chatInstructions by mutableStateOf(storage.setting("chat_instr", ""))
+        private set
+    var chatInclude by mutableStateOf(storage.setting("chat_include", "").split(",").filter { it.isNotEmpty() }.toSet())
+        private set
+    var chatMemory by mutableStateOf(storage.setting("chat_mem", "1") == "1")
+        private set
+
+    fun setChatMode(m: ChatMode) { chatMode = m; storage.saveSetting("chat_mode", m.name) }
+    fun setChatInstructions(t: String) { chatInstructions = t.take(2000); storage.saveSetting("chat_instr", chatInstructions) }
+    fun setChatMemory(on: Boolean) { chatMemory = on; storage.saveSetting("chat_mem", if (on) "1" else "0") }
+    fun toggleChatAgent(id: String) {
+        chatInclude = if (id in chatInclude) chatInclude - id else chatInclude + id
+        storage.saveSetting("chat_include", chatInclude.joinToString(","))
+    }
+
+    fun stopChat() { chatJob?.cancel() }
+
+    fun clearChat() {
+        chatJob?.cancel()
+        chat = emptyList()
+        chatStore.save(chat)
+    }
+
+    /** يرسل رسالة. يرجع true إن كانت أمر /task (بدأت مهمة تنسيق كاملة في تبويب التشغيل). */
+    fun sendChat(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty() || chatBusy) return false
+        val taskPrefix = listOf("/task ", "/مهمة ").firstOrNull { t.startsWith(it, ignoreCase = true) }
+        if (taskPrefix != null) {
+            val goal = t.substring(taskPrefix.length).trim()
+            if (goal.isEmpty() || running) {
+                chat = chat + ChatMsg("user", t) + ChatMsg("assistant",
+                    if (running) tr("توجد مهمة قيد التشغيل الآن. أوقفها أو انتظر انتهاءها.") else tr("اكتب الهدف بعد /task"), "system")
+                chatStore.save(chat)
+                return false
+            }
+            chat = chat + ChatMsg("user", t) + ChatMsg("assistant", trf("▶️ بدأت مهمة تنسيق كاملة: %s", goal.take(80)), "system")
+            chatStore.save(chat)
+            start(goal)
+            return true
+        }
+        chat = chat + ChatMsg("user", t)
+        chatStore.save(chat)
+        chatBusy = true
+        chatStatus = ""
+        val history = chat
+        val memory = if (chatMemory) MemoryBuilder.build(store.list(), t) else ""
+        chatJob = viewModelScope.launch {
+            try {
+                val msg = chatEngine.reply(history, chatMode, agents, chatInstructions, memory, chatInclude) { chatStatus = it }
+                chat = chat + msg
+                chatStore.save(chat)
+            } finally {
+                chatBusy = false
+                chatStatus = ""
+            }
+        }
+        return false
+    }
+
     var agents by mutableStateOf(storage.loadAgents())
         private set
     var checkpoint by mutableStateOf(storage.loadCheckpoint())

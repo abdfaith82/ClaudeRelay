@@ -167,6 +167,7 @@ private fun titleFor(dest: Int, current: Project?): String = when (dest) {
     2 -> tr("المشاريع")
     3 -> tr("الإعدادات")
     4 -> tr("الكود")
+    8 -> tr("المحادثة")
     6 -> tr("الرفع إلى GitHub")
     7 -> tr("المحاكي والسحابة")
     else -> tr("الملفات")
@@ -284,7 +285,7 @@ fun DrawerContent(
     val pinned = filtered.filter { it.pinned }
     val recent = filtered.filter { !it.pinned }.take(15)
     val nav = listOf(
-        Triple(1, "التشغيل", "▶️"), Triple(0, "الوكلاء", "🤖"), Triple(2, "المشاريع", "🗂️"),
+        Triple(8, "المحادثة", "💬"), Triple(1, "التشغيل", "▶️"), Triple(0, "الوكلاء", "🤖"), Triple(2, "المشاريع", "🗂️"),
         Triple(4, "الكود", "💻"), Triple(5, "الملفات", "📄")
     )
     val cloudNav = listOf(Triple(6, "الرفع إلى GitHub", "☁️"), Triple(7, "المحاكي والسحابة", "📱"), Triple(3, "الإعدادات", "⚙️"))
@@ -417,6 +418,7 @@ fun RelayScreen(vm: RelayViewModel) {
                     2 -> ProjectsTab(vm, actions, query, false, { dest = 1 }) { renameTarget = it }
                     4 -> ProjectsTab(vm, actions, query, true, { dest = 1 }) { renameTarget = it }
                     5 -> FilesTab(vm, query)
+                    8 -> ChatTab(vm) { dest = 1 }
                     6 -> GitHubTab(vm, gh)
                     7 -> EmulatorTab(vm, gh)
                     else -> SettingsTab()
