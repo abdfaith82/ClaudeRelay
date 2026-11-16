@@ -11,12 +11,32 @@ class GitHubDiffTest {
 
     @Test fun diffClassifies() {
         val remote = mapOf("a.txt" to GitHubClient.blobSha("1".toByteArray()), "old.txt" to "x")
-        val d = GitHubClient.diff(mapOf("a.txt" to "1", "b.txt" to "2", "c.txt" to "3"), remote)
+        val d = GitHubClient.diff(mapOf("a.txt" to "1".toByteArray(), "b.txt" to "2".toByteArray(), "c.txt" to "3".toByteArray()), remote)
         assertEquals(listOf("b.txt", "c.txt"), d.added)
         assertEquals(listOf("a.txt"), d.same)
         assertEquals(emptyList<String>(), d.modified)
         assertEquals(1, d.remoteOnly)
-        val m = GitHubClient.diff(mapOf("a.txt" to "changed"), remote)
+        val m = GitHubClient.diff(mapOf("a.txt" to "changed".toByteArray()), remote)
         assertEquals(listOf("a.txt"), m.modified)
+    }
+
+    @Test fun effectiveFiltersHiddenAndJunk() {
+        val b = ByteArray(1)
+        val staged = mapOf(
+            "a.txt" to b, ".gitignore" to b, ".github/workflows/x.yml" to b,
+            "app/build/o.class" to b, ".git/config" to b, "src/m.kt" to b
+        )
+        val all = LocalFiles.effective(staged, "", true, true)
+        assertEquals(setOf("a.txt", ".gitignore", ".github/workflows/x.yml", "src/m.kt"), all.keys)
+        val vis = LocalFiles.effective(staged, "proj/", false, true)
+        assertEquals(setOf("proj/a.txt", "proj/src/m.kt"), vis.keys)
+        val withJunk = LocalFiles.effective(staged, "", true, false)
+        assert("app/build/o.class" in withJunk.keys && ".git/config" !in withJunk.keys)
+    }
+
+    @Test fun cleanPathRejectsTraversal() {
+        assertEquals("a/b", LocalFiles.cleanPath("/a//./b/"))
+        assertEquals(null, LocalFiles.cleanPath("../x"))
+        assertEquals(null, LocalFiles.cleanPath(""))
     }
 }

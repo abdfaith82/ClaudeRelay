@@ -36,7 +36,7 @@ object GitHubClient {
         return md.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
-    fun diff(local: Map<String, String>, remote: Map<String, String>): GitDiff {
+    fun diff(local: Map<String, ByteArray>, remote: Map<String, String>): GitDiff {
         val added = ArrayList<String>()
         val modified = ArrayList<String>()
         val same = ArrayList<String>()
@@ -44,7 +44,7 @@ object GitHubClient {
             val r = remote[path]
             when {
                 r == null -> added.add(path)
-                r == blobSha(content.toByteArray(Charsets.UTF_8)) -> same.add(path)
+                r == blobSha(content) -> same.add(path)
                 else -> modified.add(path)
             }
         }
@@ -83,7 +83,8 @@ object GitHubClient {
             404 -> " (repository/branch not found, or token cannot see it)"
             else -> ""
         }
-        return "GitHub ${r.code}: ${msg.ifEmpty { "error" }}$hint"
+        val wf = if (msg.contains("workflow", true)) " (pushing .github/workflows needs the workflow scope)" else ""
+        return "GitHub ${r.code}: ${msg.ifEmpty { "error" }}$hint$wf"
     }
 
     private fun ok(r: Resp): Resp = if (r.code in 200..299) r else throw IOException(fail(r))
@@ -108,7 +109,7 @@ object GitHubClient {
     /** يرفع الملفات المتغيّرة فقط في commit واحد؛ يحدّث الفرع دون force. */
     fun push(
         token: String, owner: String, repo: String, branch: String,
-        files: Map<String, String>, message: String
+        files: Map<String, ByteArray>, message: String
     ): Result<PushResult> = runCatching {
         var rem = remote(token, owner, repo, branch).getOrThrow()
         if (rem.commit == null) {
@@ -126,7 +127,7 @@ object GitHubClient {
         val entries = org.json.JSONArray()
         for (path in d.changed) {
             val blob = JSONObject()
-                .put("content", Base64.getEncoder().encodeToString(files.getValue(path).toByteArray(Charsets.UTF_8)))
+                .put("content", Base64.getEncoder().encodeToString(files.getValue(path)))
                 .put("encoding", "base64")
             val sha = JSONObject(ok(call("POST", "/repos/$owner/$repo/git/blobs", token, blob)).body).getString("sha")
             entries.put(JSONObject().put("path", path).put("mode", "100644").put("type", "blob").put("sha", sha))

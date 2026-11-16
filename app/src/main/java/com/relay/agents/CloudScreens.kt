@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -94,7 +96,7 @@ private fun GhConnectionFields(cfg: GhConfig, withWorkflow: Boolean) {
     }
 }
 
-/** شاشة الرفع إلى GitHub: خطوة 1 سحب ومقارنة، خطوة 2 رفع التغييرات فقط (بدون force). */
+/** شاشة الرفع إلى GitHub: اختيار ملفات/مجلدات من الهاتف أو من الجلسات، ثم مقارنة ورفع (بدون force). */
 @Composable
 fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
     val ctx = LocalContext.current
@@ -110,11 +112,34 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
     var commitUrl by remember { mutableStateOf("") }
     val log = remember { mutableStateListOf<String>() }
 
-    fun localFiles(): Map<String, String> {
-        val id = sel ?: return emptyMap()
-        val p = prefix.trim().trim('/')
-        return vm.codeFiles(id).mapKeys { if (p.isEmpty()) it.key else "$p/${it.key}" }
+    var staged by remember { mutableStateOf<Map<String, ByteArray>>(emptyMap()) }
+    var includeHidden by remember { mutableStateOf(true) }
+    var skipJunk by remember { mutableStateOf(true) }
+
+    fun merge(scan: LocalFiles.Scan) {
+        staged = staged + scan.files
+        diff = null
+        log.add(trf("➕ أُضيف %s ملف", scan.files.size) +
+            (if (scan.skipped > 0) " " + trf("(تخطّي %s: كبير أو غير مقروء)", scan.skipped) else "") +
+            (if (scan.truncated) " " + tr("(بلغ حد العدد/الحجم)") else ""))
     }
+
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) scope.launch {
+            busy = true
+            val scan = withContext(Dispatchers.IO) { LocalFiles.Scan().also { LocalFiles.addFiles(ctx, uris, it) } }
+            merge(scan); busy = false
+        }
+    }
+    val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree != null) scope.launch {
+            busy = true
+            val scan = withContext(Dispatchers.IO) { LocalFiles.Scan().also { LocalFiles.addTree(ctx, tree, it) } }
+            merge(scan); busy = false
+        }
+    }
+
+    val files = remember(staged, prefix, includeHidden, skipJunk) { LocalFiles.effective(staged, prefix, includeHidden, skipJunk) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionCard(tr("الاتصال بـ GitHub")) {
@@ -122,20 +147,52 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
             Text(tr("الرمز يُحفظ مشفّراً على جهازك فقط ولا يُكتب في أي ملف."), style = MaterialTheme.typography.bodySmall)
         }
 
-        SectionCard(tr("المشروع المراد رفعه")) {
-            if (candidates.isEmpty()) {
-                Text(tr("لا توجد مشاريع برمجة بعد. فعّل وضع البرمجة وأنشئ مشروعاً أولاً."))
-            } else {
+        SectionCard(tr("اختيار الملفات للرفع")) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = !busy, onClick = { pickFiles.launch(arrayOf("*/*")) }) { Text(tr("📱 ملفات من الهاتف")) }
+                OutlinedButton(enabled = !busy, onClick = { pickFolder.launch(null) }) { Text(tr("📁 مجلد كامل")) }
+            }
+            if (candidates.isNotEmpty()) {
+                Text(tr("أو من جلسات البرمجة:"), style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     candidates.forEach { p ->
-                        FilterChip(selected = sel == p.id, onClick = { selected = p.id; diff = null },
-                            label = { Text(p.name, maxLines = 1) })
+                        FilterChip(selected = sel == p.id, onClick = { selected = p.id }, label = { Text(p.name, maxLines = 1) })
                     }
                 }
-                OutlinedTextField(prefix, { prefix = it; diff = null }, label = { Text(tr("مجلد فرعي في المستودع (اختياري)")) },
-                    singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(message, { message = it }, label = { Text(tr("رسالة الـ commit")) },
-                    modifier = Modifier.fillMaxWidth())
+                OutlinedButton(enabled = sel != null && !busy, onClick = {
+                    val id = sel ?: return@OutlinedButton
+                    val scan = LocalFiles.Scan()
+                    vm.codeFiles(id).forEach { (k, v) -> LocalFiles.cleanPath(k)?.let { scan.add(it, v.toByteArray(Charsets.UTF_8)) } }
+                    merge(scan)
+                }) { Text(tr("➕ إضافة ملفات الجلسة")) }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(includeHidden, { includeHidden = it; diff = null })
+                Spacer(Modifier.width(8.dp))
+                Text(tr("تضمين الملفات المخفية (.gitignore, .github …)"), style = MaterialTheme.typography.bodySmall)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(skipJunk, { skipJunk = it; diff = null })
+                Spacer(Modifier.width(8.dp))
+                Text(tr("تجاهل build / node_modules / .gradle"), style = MaterialTheme.typography.bodySmall)
+            }
+            Text(tr("مجلد .git يُستبعد دائماً."), style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(prefix, { prefix = it; diff = null }, label = { Text(tr("مجلد فرعي في المستودع (اختياري)")) },
+                singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(message, { message = it }, label = { Text(tr("رسالة الـ commit")) }, modifier = Modifier.fillMaxWidth())
+
+            if (staged.isEmpty()) {
+                Text(tr("لم تُحدَّد ملفات بعد."), style = MaterialTheme.typography.bodySmall)
+            } else {
+                val kb = files.values.sumOf { it.size.toLong() } / 1024
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(trf("المحدد للرفع: %s ملف (%s KB)", files.size, kb), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { staged = emptyMap(); diff = null }) { Text(tr("مسح الكل")) }
+                }
+                files.keys.take(40).forEach { path ->
+                    Text("• $path", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace, maxLines = 1)
+                }
+                if (files.size > 40) Text(trf("… و%s أخرى", files.size - 40), style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -152,17 +209,17 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
             Text(tr("دائماً: commit واحد ذري، بدون force push، وبدون حذف ملفات موجودة في المستودع."),
                 style = MaterialTheme.typography.bodySmall)
 
-            val canRun = cfg.ready && sel != null && !busy
+            val canRun = cfg.ready && files.isNotEmpty() && !busy
             OutlinedButton(
                 enabled = canRun,
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
-                    val files = localFiles()
+                    val snapshot = files
                     scope.launch {
                         busy = true
                         val r = withContext(Dispatchers.IO) { GitHubClient.remote(cfg.token.trim(), cfg.owner.trim(), cfg.repo.trim(), cfg.branch.trim()) }
                         r.onSuccess {
-                            val d = GitHubClient.diff(files, it.files)
+                            val d = GitHubClient.diff(snapshot, it.files)
                             diff = d
                             log.add(trf("مقارنة: جديد %s، معدّل %s، متطابق %s", d.added.size, d.modified.size, d.same.size))
                         }.onFailure { log.add("❌ " + (it.message ?: it.toString())) }
@@ -182,11 +239,11 @@ fun GitHubTab(vm: RelayViewModel, cfg: GhConfig) {
                 enabled = canRun && (strategy == 1 || (d != null && d.changed.isNotEmpty())),
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
-                    val files = localFiles()
+                    val snapshot = files
                     scope.launch {
                         busy = true
                         val r = withContext(Dispatchers.IO) {
-                            GitHubClient.push(cfg.token.trim(), cfg.owner.trim(), cfg.repo.trim(), cfg.branch.trim(), files, message.ifBlank { "Update" })
+                            GitHubClient.push(cfg.token.trim(), cfg.owner.trim(), cfg.repo.trim(), cfg.branch.trim(), snapshot, message.ifBlank { "Update" })
                         }
                         r.onSuccess {
                             if (it.count == 0) log.add(tr("لا تغييرات للرفع."))
